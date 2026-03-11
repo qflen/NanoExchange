@@ -45,3 +45,26 @@ Design parameters:
 - One more class to own and test; the random-ops test cross-checks against `HashMap` to catch divergence.
 - Resize copies all entries, which is allowed to allocate (it's not on the hot path — it's a startup-sized concern). Pre-size the map at construction to avoid it entirely in practice.
 - `get` return type is `V`, not `Optional<V>`. Callers check for null. This is a deliberate concession to hot-path performance.
+
+---
+
+## ADR-003: Object pooling via Vyukov MPMC ring buffer
+
+**Status:** Accepted — slice 1
+
+**Context.** The hot path must not allocate. `Order`, `ExecutionReport`, and similar short-lived message types are therefore pooled: pre-allocate N instances at startup, hand them out on acquire, reclaim them on release. This is the textbook technique for trading engines and JVM-based low-latency systems generally.
+
+Two problems to solve:
+1. **What is the data structure backing the pool?** A `ConcurrentLinkedQueue` allocates a `Node` per enqueue — defeats the purpose. A `LinkedBlockingQueue` uses locks — introduces blocking and unbounded tail latency. A simple array + index with `synchronized` — same problem. We need a **bounded, lock-free, allocation-free** queue.
+
+2. **What concurrency regime does it support?** Within a fully single-threaded engine, the pool is effectively SPSC. But a realistic deployment has the network thread acquiring orders (to populate from the wire) and the engine thread releasing them back after processing — a producer/consumer split across threads. In a more aggressive setup multiple network threads might concurrently populate orders. MPMC covers all cases without forcing us to predict the final thread model.
+
+**Decision.** Implement a Vyukov bounded MPMC queue (`ObjectPool<E>`). Each slot carries a sequence number that acts as a hand-off token between producers and consumers; operations are wait-free (bounded-step) rather than merely lock-free. Positions stored as `AtomicLong`; sequence array accessed via `VarHandle` with acquire/release semantics to establish the happens-before edge between the slot write (producer) and the slot read (consumer).
+
+On empty, `acquire` returns `null` (not throws — exceptions on the hot path are unacceptable). On full, `release` returns `false` and the caller drops the reference; the lost instance is GC'd as a one-off cost, which is strictly preferable to blocking or failing the hot path.
+
+**Consequences.**
+- Pool construction pre-fills to capacity, so a warmed engine never allocates under steady-state traffic.
+- Capacity is rounded up to a power of two — the ring index is a mask instead of a modulo.
+- False sharing between the two position counters and between adjacent slots is not yet addressed. Padding is a known follow-up; deferred to slice 7 benchmarks, where we can measure whether it actually matters in practice before adding code for it.
+- Callers must be disciplined: every acquired instance has a matching release. Leaked instances reduce effective capacity until restart. Unit tests cover round-trip and uniqueness; integration tests in later slices will verify long-running steady-state pool levels.
