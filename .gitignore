@@ -1,0 +1,17 @@
+.gradle/
+build/
+**/build/
+*.class
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# Claude / AI assistant scratch
+.claude/
+CLAUDE.md
+.claude.md
+*.claude.md
+.cursor/
+.aider*
+
