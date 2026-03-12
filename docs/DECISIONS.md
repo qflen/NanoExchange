@@ -71,6 +71,31 @@ On empty, `acquire` returns `null` (not throws — exceptions on the hot path ar
 
 ---
 
+## ADR-004: Single-threaded matching engine
+
+**Status:** Accepted — slice 2
+
+**Context.** A matching engine has a global-state problem: every order affects a shared book. Correctness demands a total order over inbound operations — two orders at the same price/time must deterministically produce the same outcome every time. Multiple threads sharing a book need coordination, and every synchronization primitive you add — locks, STM, even lock-free structures — adds latency variance.
+
+Real exchanges (NYSE Pillar, Nasdaq INET, LMAX, Bats, Eurex) all run matching on a single thread per instrument (or per partition of instruments), then scale horizontally by sharding. The thread-per-instrument approach buys:
+- **Deterministic replay** — a journal of inbound messages plus a single-threaded consumer reproduces byte-for-byte the same output sequence, invaluable for debugging, backtesting, and regulatory audit.
+- **No synchronization tax** — the hot path executes in the branch-predictor's sweet spot with no memory barriers.
+- **Simpler reasoning** — invariants like "best bid < best ask" don't need atomic sections to hold.
+
+The alternatives:
+- **Lock-per-side** (split bid and ask across two threads): doesn't help because matching operations touch both sides.
+- **STM / optimistic concurrency**: adds retry overhead and destroys latency predictability.
+- **Partitioned books within one instrument**: impossible — price-time priority is defined across all orders for that instrument.
+
+**Decision.** The matching engine runs on one thread. Inbound messages arrive via a lock-free ring buffer (slice 3), outbound execution reports go to a sink the calling thread owns. Horizontal scale comes from running one engine per instrument, not from parallelizing within one.
+
+**Consequences.**
+- Throughput of a single instrument is capped by one core's clock; headroom for ~10M msg/sec of straightforward limit-vs-limit matching on modern hardware is ample for realistic load.
+- The engine must never block — no I/O, no locks, no allocation that might hit a collector pause. The journal (slice 3) is memory-mapped and the producer pattern is fire-and-forget from the engine's perspective.
+- Cancel and modify API calls must be serialized through the same single thread, which means they flow through the same ring buffer as new orders.
+
+---
+
 ## ADR-005: Sorted array (not red-black tree) for price levels
 
 **Status:** Accepted — slice 2 (revisit in slice 7 with benchmarks)
@@ -97,3 +122,40 @@ The question is whether the O(N) insert cost of the array ever actually bites. F
 - The assumption "N is small" is load-bearing. Slice 7 benchmarks must validate it — if N grows past ~200 we revisit.
 - The shift cost scales with N, so a pathological scenario (many fleeting levels at random prices) would punish this choice. Real market data does not look like that, but the test suite should include a worst-case insertion stress.
 - Binary search in a 50-entry array is a pragmatic optimization; a linear scan from index 0 might actually win on branch prediction for very small N, but we keep the binary search for clarity and to handle sudden growth.
+
+---
+
+## ADR-006: Self-trade prevention policy — reject the incoming order
+
+**Status:** Accepted — slice 2
+
+**Context.** Trading against yourself is generally prohibited by exchange rules and is flagged by regulators as potential wash-trading. When an incoming order would cross a resting order from the same account, the exchange must prevent the trade. There are three standard policies:
+
+1. **Skip** — ignore the same-account resting, match with whatever is behind it. Preserves the rest of the book untouched but can produce fills at prices worse than the best visible, which is a surprising execution outcome.
+2. **Decrement-older** — cancel or reduce the resting order, then match the incoming against the remainder of the book. Modifies existing book state based on a new event, which is hard to reason about for users monitoring their resting orders.
+3. **Reject-new** — if the incoming would cross any same-account resting at a crossing price, reject the incoming entirely. No fills, no state change to existing orders.
+
+**Decision.** Reject-new. The engine performs an STP preflight scan before any matching; if any same-`clientId` resting exists at a crossing price, the incoming order is rejected with `REJECT_SELF_TRADE` and nothing else happens. No ACK, no partial fills, no silent state mutation.
+
+**Consequences.**
+- Simpler to reason about, simpler to explain to users. Every inbound event has one of two outcomes: normal processing, or a clean REJECTED-with-reason.
+- FOK's own pre-match viability check only counts non-same-client display quantity, because even without STP-reject, same-client restings can't contribute to a fill.
+- The preflight is a linear scan across crossing levels. In the common case (a shallow book with no self-conflict), it terminates on the first non-crossing level. Cost is bounded by book depth near BBO and is not a hot-path concern.
+- This policy is easy to toggle later if a real venue prefers decrement-older; the preflight hook would move from a reject to a mutate step.
+
+---
+
+## ADR-007: Iceberg refill moves the order to the tail of the queue
+
+**Status:** Accepted — slice 2
+
+**Context.** An iceberg order has a visible "tip" quantity (`displayQuantity`) and a hidden reserve (`hiddenQuantity`). When the tip is fully matched, the order "refills" from the reserve. A policy question: does the refilled order retain its original time-priority position (i.e., remain at the head of its price level), or does it go to the tail?
+
+Real exchanges differ in the details but the dominant convention — Nasdaq, Eurex, CME, most MTFs — is **refill-to-tail**. The reasoning: the whole point of an iceberg is to reduce visible market impact; in exchange for that privacy, you give up the aggressive time priority that a fully-displayed order would earn. If the refill kept priority, icebergs would be strictly better than displayed orders of equal size and the market would fill up with them, defeating the price-discovery function of the public quote.
+
+**Decision.** On refill, the engine removes the iceberg from the book entirely, reassigns its `displayQuantity` from the hidden reserve (capped by `displaySize`), and re-appends it at the tail of its price level.
+
+**Consequences.**
+- Other resting orders that arrived after the iceberg but before its refill are now ahead in the queue. A subsequent taker sweeping the price level will fill them first.
+- A pathological taker that repeatedly submits tiny orders to "walk" an iceberg down would still pay the iceberg's displayed price, but would not grant the iceberg disproportionate fill priority across its hidden quantity.
+- The engine's match loop must handle the subtle case where a refilled order ends up at the tail of the same level it came from; the outer loop re-enters on the same best level and picks up the new head correctly.
