@@ -38,6 +38,8 @@ public final class Order {
     long price;
     long quantity;
     long displayQuantity;
+    long hiddenQuantity;
+    long displaySize;
     long timestampNanos;
 
     Order prev;
@@ -69,10 +71,34 @@ public final class Order {
         this.orderType = orderType;
         this.price = price;
         this.quantity = quantity;
-        this.displayQuantity = 0L;
+        this.displayQuantity = orderType == TYPE_ICEBERG ? 0L : quantity;
+        this.hiddenQuantity = 0L;
+        this.displaySize = 0L;
         this.timestampNanos = timestampNanos;
         this.prev = null;
         this.next = null;
+    }
+
+    /**
+     * Configure this order as an iceberg. Must be called after {@link #reset} on an order
+     * whose {@code orderType} is {@link #TYPE_ICEBERG}. The visible portion becomes
+     * {@code displaySize} (or the remaining quantity if smaller), the rest is hidden.
+     *
+     * @param displaySize maximum visible quantity at any time (the "tip"); must be &gt; 0
+     * @throws IllegalStateException    if this order is not an iceberg
+     * @throws IllegalArgumentException if {@code displaySize} is not positive
+     */
+    public void configureIceberg(long displaySize) {
+        if (orderType != TYPE_ICEBERG) {
+            throw new IllegalStateException("configureIceberg called on non-iceberg order");
+        }
+        if (displaySize <= 0) {
+            throw new IllegalArgumentException("displaySize must be positive");
+        }
+        this.displaySize = displaySize;
+        long visible = Math.min(displaySize, quantity);
+        this.displayQuantity = visible;
+        this.hiddenQuantity = quantity - visible;
     }
 
     /** Clear fields before returning to the pool. Prevents accidental reuse of stale refs. */
@@ -84,6 +110,8 @@ public final class Order {
         this.price = 0L;
         this.quantity = 0L;
         this.displayQuantity = 0L;
+        this.hiddenQuantity = 0L;
+        this.displaySize = 0L;
         this.timestampNanos = 0L;
         this.prev = null;
         this.next = null;
@@ -96,6 +124,8 @@ public final class Order {
     public long price()          { return price; }
     public long quantity()       { return quantity; }
     public long displayQuantity(){ return displayQuantity; }
+    public long hiddenQuantity() { return hiddenQuantity; }
+    public long displaySize()    { return displaySize; }
     public long timestampNanos() { return timestampNanos; }
 
     @Override

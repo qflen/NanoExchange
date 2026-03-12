@@ -12,6 +12,8 @@ class OrderTest {
         o.prev = new Order();
         o.next = new Order();
         o.displayQuantity = 99L;
+        o.hiddenQuantity = 55L;
+        o.displaySize = 33L;
 
         o.reset(42L, 7L, Order.SIDE_BUY, Order.TYPE_LIMIT, 100_00000000L, 10L, 123L);
 
@@ -21,10 +23,32 @@ class OrderTest {
         assertThat(o.orderType()).isEqualTo(Order.TYPE_LIMIT);
         assertThat(o.price()).isEqualTo(100_00000000L);
         assertThat(o.quantity()).isEqualTo(10L);
-        assertThat(o.displayQuantity()).isZero();
+        assertThat(o.displayQuantity()).isEqualTo(10L);
+        assertThat(o.hiddenQuantity()).isZero();
+        assertThat(o.displaySize()).isZero();
         assertThat(o.timestampNanos()).isEqualTo(123L);
         assertThat(o.prev).isNull();
         assertThat(o.next).isNull();
+    }
+
+    @Test
+    void resetIcebergOrderLeavesDisplayQuantityZeroUntilConfigure() {
+        Order o = new Order();
+        o.reset(1L, 1L, Order.SIDE_BUY, Order.TYPE_ICEBERG, 100L, 50L, 0L);
+        assertThat(o.displayQuantity()).isZero();
+        o.configureIceberg(10L);
+        assertThat(o.displayQuantity()).isEqualTo(10L);
+        assertThat(o.hiddenQuantity()).isEqualTo(40L);
+        assertThat(o.displaySize()).isEqualTo(10L);
+    }
+
+    @Test
+    void configureIcebergRequiresIcebergType() {
+        Order o = new Order();
+        o.reset(1L, 1L, Order.SIDE_BUY, Order.TYPE_LIMIT, 100L, 50L, 0L);
+        org.assertj.core.api.Assertions
+                .assertThatThrownBy(() -> o.configureIceberg(10L))
+                .isInstanceOf(IllegalStateException.class);
     }
 
     @Test

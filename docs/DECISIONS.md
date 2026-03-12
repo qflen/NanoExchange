@@ -68,3 +68,32 @@ On empty, `acquire` returns `null` (not throws — exceptions on the hot path ar
 - Capacity is rounded up to a power of two — the ring index is a mask instead of a modulo.
 - False sharing between the two position counters and between adjacent slots is not yet addressed. Padding is a known follow-up; deferred to slice 7 benchmarks, where we can measure whether it actually matters in practice before adding code for it.
 - Callers must be disciplined: every acquired instance has a matching release. Leaked instances reduce effective capacity until restart. Unit tests cover round-trip and uniqueness; integration tests in later slices will verify long-running steady-state pool levels.
+
+---
+
+## ADR-005: Sorted array (not red-black tree) for price levels
+
+**Status:** Accepted — slice 2 (revisit in slice 7 with benchmarks)
+
+**Context.** Each side of the book has a collection of price levels. The operations are: look up the best (most common — every match begins here), find a specific price (for insert/cancel), iterate from best toward worse (for depth queries and matching). A classical data-structures answer would be a balanced BST — O(log N) everything, tidy asymptotics.
+
+But asymptotics lie on small N. A healthy book has a tight cluster of active levels near the BBO; a liquid stock might have 50 levels on each side and a quiet one might have 10. Pointer-chasing a red-black tree with that N hits cache misses the sorted-array version avoids entirely.
+
+Sorted array tradeoff:
+- Best-level access: O(1) (index 0).
+- Specific-price lookup: O(log N) via binary search.
+- Insert/remove at arbitrary position: O(N) due to shift.
+- All of the above operate on contiguous memory, prefetcher-friendly.
+
+RB-tree tradeoff:
+- Insert/remove: O(log N) rotations, but each rotation touches non-adjacent memory.
+- Iteration: O(N) with pointer chasing.
+
+The question is whether the O(N) insert cost of the array ever actually bites. For a book with 50 levels, shifting 50 pointers is ~100ns worst case and usually far less (we typically insert near one end or at an existing level). The same 50-element RB-tree operation pays cache misses on at least log₂(50) ≈ 6 nodes.
+
+**Decision.** Use a best-first sorted `PriceLevel[]` per side. Binary-search for insert/find, array-shift on mutation, power-of-two resize on growth. The level object itself is pooled (via `ObjectPool<PriceLevel>`) so creating a new level is allocation-free in steady state.
+
+**Consequences.**
+- The assumption "N is small" is load-bearing. Slice 7 benchmarks must validate it — if N grows past ~200 we revisit.
+- The shift cost scales with N, so a pathological scenario (many fleeting levels at random prices) would punish this choice. Real market data does not look like that, but the test suite should include a worst-case insertion stress.
+- Binary search in a 50-entry array is a pragmatic optimization; a linear scan from index 0 might actually win on branch prediction for very small N, but we keep the binary search for clarity and to handle sudden growth.
