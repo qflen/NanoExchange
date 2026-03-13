@@ -162,6 +162,30 @@ Real exchanges differ in the details but the dominant convention — Nasdaq, Eur
 
 ---
 
+## ADR-008: Memory-mapped append-only journal
+
+**Status:** Accepted — slice 3
+
+**Context.** Every engine input and every emitted execution report must persist so the engine can be replayed deterministically — for restart recovery, for regression testing against historical days, and for audit. The options:
+
+1. **Log4j / SLF4J** text lines — simple but allocation-heavy, slow, and the format is not stable enough for byte-identical replay.
+2. **Synchronous `FileChannel.write`** per record — every record is at least one syscall, which puts the engine one context switch away from a 10-microsecond tail excursion on every event. Batching helps, but the syscall still shows up in the p99.9.
+3. **Memory-mapped file (`mmap`)** — the kernel handles the write through the page cache; from userspace a record "write" is a handful of `put`s into a `MappedByteBuffer`, which compiles down to ordinary store instructions. No syscall on the hot path. Flush (`msync` / `MappedByteBuffer.force`) is called periodically, not per record.
+
+Option (3) is what LMAX, Aeron, Chronicle Queue, and most ultra-low-latency logging frameworks use, and for the same reason: it eliminates the syscall-per-record cost and turns persistence into a sequential-write workload that SSDs and page-cache-backed mechanisms handle very well.
+
+**Decision.** The journal is a single memory-mapped file of a pre-allocated size (set at startup, typically tens to hundreds of megabytes — it's cheap virtual memory). Records are appended by writing into the mapped buffer at the current offset. `force()` is called only at batch/shutdown boundaries, not per record.
+
+Record format is sequence (int64) + length (int32) + payload (N bytes) + CRC32 (int32), all little-endian. The CRC detects torn writes at the tail; a zero-length field detects untouched file space (the tail of the mapped region is zero-initialized). Replay stops cleanly on either signal, which means no explicit end-of-log marker is needed — the absence of a valid next record *is* the signal.
+
+**Consequences.**
+- Append latency is dominated by a few cache-line stores and one CRC computation; no syscall overhead. Measured in slice 3 as well under a microsecond per record on warm cache.
+- The journal size is fixed at construction. If an engine session writes more than that, `append` throws `IllegalStateException`. Callers must size generously. Rolling segment files are a reasonable follow-up but add complexity that slice 3 doesn't need — one well-sized file per session is enough for benchmarks and test-day replay.
+- `MappedByteBuffer` is not unmapped cleanly on JDK 21 without `sun.misc.Unsafe`-ish gymnastics. We live with this; the mapping is reclaimed when the JVM exits. Tests that open and close journals repeatedly use `@TempDir` so leftover mappings don't pollute the working tree.
+- CRC32 is not cryptographic, which is fine — the goal is torn-write detection, not tamper detection. The implementation uses `java.util.zip.CRC32`, which is hardware-accelerated on x86-64 and ARM64 via intrinsics and costs only a few nanoseconds per small payload.
+
+---
+
 ## ADR-009: Manual cache-line padding on ring-buffer sequences
 
 **Status:** Accepted — slice 3
