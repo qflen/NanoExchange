@@ -159,3 +159,38 @@ Real exchanges differ in the details but the dominant convention — Nasdaq, Eur
 - Other resting orders that arrived after the iceberg but before its refill are now ahead in the queue. A subsequent taker sweeping the price level will fill them first.
 - A pathological taker that repeatedly submits tiny orders to "walk" an iceberg down would still pay the iceberg's displayed price, but would not grant the iceberg disproportionate fill priority across its hidden quantity.
 - The engine's match loop must handle the subtle case where a refilled order ends up at the tail of the same level it came from; the outer loop re-enters on the same best level and picks up the new head correctly.
+
+---
+
+## ADR-009: Manual cache-line padding on ring-buffer sequences
+
+**Status:** Accepted — slice 3
+
+**Context.** The SPSC ring buffer between the network thread (producer) and the engine thread (consumer) has two hot long fields: `producerSeq` and `consumerSeq`. The producer writes the former on every enqueue and reads the latter on potential wraparound; the consumer writes the latter on every dequeue and reads the former on potential empty. Logically the two sides never touch the same word — but if both fields live in the same 64-byte cache line (which they would, by default, being consecutive `long` fields on the same object), the CPU's coherence protocol treats every write as invalidating the other core's copy of the line. That coherence traffic shows up as MESI invalidations, additional L1 misses, and tens of nanoseconds of extra latency per enqueue and dequeue — exactly the kind of "spooky action at a distance" that gives busy SPSC queues their bad reputation on multi-core.
+
+This is the classic **false sharing** problem. The cure is to ensure each of the two hot fields lives alone in its cache line.
+
+**Options:**
+
+1. **`@jdk.internal.vm.annotation.Contended`** — JDK-internal, requires `--add-exports java.base/jdk.internal.vm.annotation=ALL-UNNAMED` or `-XX:-RestrictContended`, not a portable story for a public library.
+2. **Separate boxed objects per sequence** — destroys cache locality on the happy path and adds an indirection.
+3. **Manual padding with unused `long` fields** — unambiguous, portable, zero runtime cost. Ugly but correct.
+
+Option (3) is what LMAX, Aeron, Agrona, and JCTools all use for the same reason.
+
+**Decision.** The `RingBuffer` class lays out its hot fields in four padded "islands," each spanning roughly one 64-byte cache line:
+
+- Producer sequence island: 7 padding longs + `producerSeq` + 7 padding longs.
+- Producer-local cached consumer sequence + 7 padding longs.
+- Consumer sequence + 7 padding longs.
+- Consumer-local cached producer sequence + 7 padding longs.
+
+Seven longs on each side of the hot field is belt-and-suspenders: it guarantees the hot field occupies its own line regardless of object header alignment, JVM field-reordering choices, or the 128-byte "adjacent cache line prefetch" that some Intel chips perform (which is why the Aeron/Agrona convention is effectively 128 bytes, not 64).
+
+Additionally, each side caches the opposite side's sequence in a producer-local / consumer-local field. On the happy path where the ring is neither full nor empty, the cached value is sufficient, and the authoritative opposite-side sequence is read only when the cache would indicate a block. That reduces cross-core reads by orders of magnitude under steady state.
+
+**Consequences.**
+- The `RingBuffer` class contains several `@SuppressWarnings("unused")` padding longs. These *must not* be removed by well-meaning refactoring; the compiler cannot detect their purpose. A comment next to each island explains why.
+- Memory overhead is a few extra cache lines per ring — trivial compared to the slot array itself.
+- The cached-sequence technique means a freshly-created ring observes the other side's sequence on the very first operation (since the cache is initialized to a "will block" value), which is correct; a steady-state ring only refreshes the cache on catch-up transitions, which is exactly what we want.
+- Verification is structural: the test suite exercises the SPSC invariants (monotonic, no gaps, no duplicates) under load; false-sharing effects are visible in benchmarks (slice 7) rather than unit tests.
