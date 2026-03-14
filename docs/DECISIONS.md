@@ -218,3 +218,48 @@ Additionally, each side caches the opposite side's sequence in a producer-local 
 - Memory overhead is a few extra cache lines per ring — trivial compared to the slot array itself.
 - The cached-sequence technique means a freshly-created ring observes the other side's sequence on the very first operation (since the cache is initialized to a "will block" value), which is correct; a steady-state ring only refreshes the cache on catch-up transitions, which is exactly what we want.
 - Verification is structural: the test suite exercises the SPSC invariants (monotonic, no gaps, no duplicates) under load; false-sharing effects are visible in benchmarks (slice 7) rather than unit tests.
+
+---
+
+## ADR-010: Length-prefix framing over delimiter framing
+
+**Status:** Accepted — slice 4
+
+**Context.** The TCP byte stream carries variable-length messages. The two common ways to mark message boundaries are:
+
+1. **Delimiter framing** — a reserved byte (or byte sequence) marks the end of each message. Requires either escaping inside payloads or guaranteeing the delimiter never appears in payload content.
+2. **Length-prefix framing** — the first few bytes of each frame are a length field; the receiver reads exactly that many additional bytes.
+
+Delimiter framing is common in text protocols (HTTP/1 uses CRLF, SMTP uses `.` lines) but binary payloads in NanoExchange include 64-bit prices, quantities, and timestamps — every byte value from `0x00` to `0xFF` is a legitimate payload byte. There is no delimiter that is not also a valid payload value, so delimiter framing would force payload escaping, which adds encode/decode complexity and makes the wire size non-constant for a given logical message.
+
+**Decision.** All frames are prefixed with a 4-byte little-endian length field giving the number of bytes that follow. The body is then a 1-byte type + variable payload + 4-byte CRC32. The length field itself is not covered by the CRC; the CRC covers type + payload.
+
+**Consequences.**
+- Decoders have a tight state machine: wait for 4 bytes, read length, wait for length bytes, verify CRC, dispatch. No escape-character handling, no scanning for delimiters.
+- A nonsensical length (negative, or larger than a 1 MiB sanity bound) is treated as a desynchronization and closes the connection. The sanity bound is generous relative to any legitimate message size (the biggest message is an execution report at ~75 bytes) but tight enough to catch runaway corruption quickly.
+- The CRC is content-addressed (framing-independent). If the same message is carried inside a different envelope later — say, batched inside a UDP snapshot frame — the message's CRC is unchanged. This makes cross-transport validation tests easy.
+
+---
+
+## ADR-011: NIO Selector on a dedicated thread, zero engine work on the network thread
+
+**Status:** Accepted — slice 4
+
+**Context.** There are two reasonable Java networking primitives for a server at this scale:
+
+1. **Blocking `SocketChannel` per client with a thread pool.** Simple but each thread costs ~1 MB of stack plus wakeup overhead. A few thousand clients become a scheduling problem.
+2. **Non-blocking `SocketChannel` + `Selector` on one thread.** The kernel `kqueue`/`epoll` multiplexes thousands of connections; one user-space thread handles all ready events. This is the classical "reactor" pattern.
+
+Option (2) is what almost every serious Java server uses — Netty, Vert.x, Undertow, LMAX Disruptor-based systems — and is a straightforward fit for an order gateway where per-connection work is tiny (parse a frame, forward to engine).
+
+A subtler decision: what does the selector thread *do* with decoded events? Two wrong answers are (a) invoke the engine directly on the selector thread (blocks network I/O during engine work), and (b) allocate a queued-event object per message (defeats the zero-allocation discipline).
+
+**Decision.** The order gateway runs the selector on a dedicated thread. That thread's job is narrow: accept connections, read bytes into a pre-allocated per-session buffer, decode frames, and forward the decoded fields into an `InboundHandler` callback. The handler is expected to push the decoded message into a lock-free ring buffer (slice 3) for the engine to consume. The return path uses another ring buffer: the engine publishes execution reports, and the selector thread reads them and writes to the appropriate client socket.
+
+Both read and write buffers are `ByteBuffer.allocateDirect` at connection time and reused for the life of the connection. No allocation happens per frame in the steady state.
+
+**Consequences.**
+- Per-connection memory is bounded and known at startup.
+- The selector thread never blocks on engine work — the worst it can do to order-entry latency is a dropped frame if the ring buffer to the engine is full (which we handle by backpressuring the client).
+- Outbound writes can stall when a slow client causes socket-level backpressure. The gateway registers `OP_WRITE` in that case and resumes draining when the socket accepts more bytes. Pending outbound bytes are bounded by the per-session write buffer; overflow forces a disconnect, which is the correct policy for a slow client that can't keep up with the feed it subscribed to.
+- The session-assigned `clientId` is authoritative. A client may include a clientId in its NEW_ORDER wire payload (useful for their own bookkeeping), but the gateway overwrites it with the session-bound value before forwarding — clients cannot spoof another account by putting that account's clientId in the frame. STP correctness depends on this.

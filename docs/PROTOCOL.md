@@ -72,4 +72,127 @@ Writes are from a single thread (the engine). `replay` opens an independent read
 
 ---
 
-*Slices 4 and later will extend this document with the wire protocol (binary frames over TCP), the market-data feed format (UDP multicast with snapshot + incremental), and any further on-disk formats.*
+## 2. Order-entry wire protocol (slice 4)
+
+Clients connect to the order gateway over TCP and exchange length-prefixed binary frames. The transport is TCP with `TCP_NODELAY` enabled on both sides (Nagle's algorithm is disabled because it would coalesce small order frames and add up to 200 ms of latency waiting for ACKs — unacceptable for order entry).
+
+### Framing
+
+```
+ offset  size  field
+ ------  ----  ---------------------------------------
+      0     4  length (LE int32) — bytes *after* this field (type + payload + crc)
+      4     1  type (see type table below)
+      5     N  payload (variable, per type)
+  5 + N     4  crc32 (LE int32) — over bytes [4, 5+N)
+```
+
+Total frame size is `8 + N` bytes. CRC covers the type byte and payload — not the length prefix and not the CRC itself. That way the CRC is content-addressed: moving the same message into a new framing envelope yields the same CRC.
+
+Length-prefix framing is used instead of a delimiter because payloads contain arbitrary binary data; any delimiter byte will eventually appear inside a valid payload.
+
+### Message types
+
+| value  | name          | direction        |
+|--------|---------------|------------------|
+| 0x01   | NEW_ORDER     | client → engine  |
+| 0x02   | CANCEL        | client → engine  |
+| 0x03   | MODIFY        | client → engine  |
+| 0x20   | ACK           | engine → client  |
+| 0x21   | PARTIAL_FILL  | engine → client  |
+| 0x22   | FILL          | engine → client  |
+| 0x23   | CANCELED      | engine → client  |
+| 0x24   | REJECTED      | engine → client  |
+| 0x25   | MODIFIED      | engine → client  |
+| 0x40   | HEARTBEAT     | either direction |
+
+Inbound values are in `0x00–0x1F`, outbound in `0x20–0x3F`, control (heartbeat, etc.) in `0x40–0x4F`. New values never reuse old slots — byte constants are part of the compatibility contract.
+
+### NEW_ORDER payload (50 bytes)
+
+| offset | size | field            | notes                                   |
+|--------|------|------------------|-----------------------------------------|
+|      0 |    8 | clientId         | advisory on the wire; gateway overrides from the authenticated session id |
+|      8 |    8 | orderId          | client-assigned, must be unique per session |
+|     16 |    1 | side             | 0 = BUY, 1 = SELL                        |
+|     17 |    1 | orderType        | 0 = LIMIT, 1 = MARKET, 2 = IOC, 3 = FOK, 4 = ICEBERG |
+|     18 |    8 | price            | fixed-point (price × 10⁸); ignored for MARKET |
+|     26 |    8 | quantity         | positive                                 |
+|     34 |    8 | displaySize      | iceberg tip size; 0 for non-iceberg      |
+|     42 |    8 | timestampNanos   | client-nominated nanoseconds             |
+
+### CANCEL payload (16 bytes)
+
+| offset | size | field          |
+|--------|------|----------------|
+|      0 |    8 | orderId        |
+|      8 |    8 | timestampNanos |
+
+### MODIFY payload (32 bytes)
+
+| offset | size | field          |
+|--------|------|----------------|
+|      0 |    8 | orderId        |
+|      8 |    8 | newPrice       |
+|     16 |    8 | newQuantity    |
+|     24 |    8 | timestampNanos |
+
+### Execution-report payload (66 bytes) — shared by ACK, PARTIAL_FILL, FILL, CANCELED, REJECTED, MODIFIED
+
+The report *kind* is conveyed by the frame type byte; the payload does not repeat it.
+
+| offset | size | field                | notes                                |
+|--------|------|----------------------|--------------------------------------|
+|      0 |    8 | orderId              |                                      |
+|      8 |    8 | clientId             |                                      |
+|     16 |    1 | side                 |                                      |
+|     17 |    8 | price                | the order's resting price            |
+|     25 |    8 | executedQuantity     | this fill's size; 0 for ACK/CANCELED |
+|     33 |    8 | executedPrice        | this fill's price; 0 for ACK         |
+|     41 |    8 | remainingQuantity    | after this event                     |
+|     49 |    8 | counterpartyOrderId  | the maker on a FILL / PARTIAL        |
+|     57 |    1 | rejectReason         | 0 when not REJECTED; see engine `ExecutionReport` constants |
+|     58 |    8 | timestampNanos       |                                      |
+
+### HEARTBEAT payload (0 bytes)
+
+Just the type byte + CRC. Either side may send; the counterparty is expected to ignore-or-respond within its own policy.
+
+### Example: NEW_ORDER frame (hex)
+
+A NEW_ORDER for clientId=0x42, orderId=0x01, BUY, LIMIT, price=100.00 (10_000_000_000), qty=10, displaySize=0, ts=0:
+
+```
+04 00 00 00 | 32 00 00 00 length = 50 + 1 (type) + 4 (crc) = 55? no — see below
+```
+
+Worked example (actual bytes):
+
+```
+offset  hex                                                meaning
+ 0x00   37 00 00 00                                        length = 55 (type + payload + crc)
+ 0x04   01                                                 type = NEW_ORDER
+ 0x05   42 00 00 00 00 00 00 00                            clientId = 0x42
+ 0x0D   01 00 00 00 00 00 00 00                            orderId = 1
+ 0x15   00                                                 side = BUY
+ 0x16   00                                                 orderType = LIMIT
+ 0x17   00 E4 0B 54 02 00 00 00                            price = 10_000_000_000
+ 0x1F   0A 00 00 00 00 00 00 00                            quantity = 10
+ 0x27   00 00 00 00 00 00 00 00                            displaySize = 0
+ 0x2F   00 00 00 00 00 00 00 00                            timestampNanos = 0
+ 0x37   XX XX XX XX                                        crc32 over bytes [0x04, 0x37)
+```
+
+Total on wire: 59 bytes (4 length + 55 body-and-crc). That matches `8 + NEW_ORDER_PAYLOAD_SIZE(50) + 1 = 59`.
+
+### Error handling
+
+- A length that is less than 5 (type+crc) or greater than 1 MiB is treated as corruption; the gateway closes the connection.
+- A CRC mismatch closes the connection.
+- An unknown type byte closes the connection.
+- Partial bytes (length prefix or body short of the declared length) do not close the connection; they simply wait for more.
+- Malformed frames trigger `InboundHandler.onProtocolError` followed by `onDisconnect`.
+
+---
+
+*Slice 5 will extend this document with the UDP multicast market-data feed (snapshot + incremental).*
