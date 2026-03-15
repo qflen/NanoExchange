@@ -195,4 +195,92 @@ Total on wire: 59 bytes (4 length + 55 body-and-crc). That matches `8 + NEW_ORDE
 
 ---
 
-*Slice 5 will extend this document with the UDP multicast market-data feed (snapshot + incremental).*
+## 3. Market-data feed (slice 5)
+
+Market data is published to a UDP multicast group. Each datagram is one self-contained message, framed as:
+
+```
+ offset  size  field
+ ------  ----  --------------------------------------
+      0     8  feedSequence (LE int64, monotonic across the entire feed)
+      8     1  messageType
+      9     N  payload (variable, per type)
+  9 + N     4  crc32 (LE int32) — over bytes [0, 9+N)
+```
+
+The feed sequence is monotonic across **all** message types — consumers detect a gap by observing a missing sequence value, not by looking at per-type sequences.
+
+Every datagram is sized to ≤ 1472 bytes (Ethernet MTU minus UDP/IP headers) to avoid IP fragmentation. Snapshots larger than that chunk into multiple SNAPSHOT parts.
+
+### Feed message types
+
+| value | name         | notes                                         |
+|-------|--------------|-----------------------------------------------|
+| 0x01  | BOOK_UPDATE  | aggregate quantity at one (side, price) level |
+| 0x02  | TRADE        | one match between a taker and a maker         |
+| 0x03  | SNAPSHOT     | part of a full-book snapshot                  |
+| 0x04  | HEARTBEAT    | liveness tick                                 |
+
+### BOOK_UPDATE payload (21 bytes)
+
+| offset | size | field            | notes                                 |
+|--------|------|------------------|---------------------------------------|
+|      0 |    1 | side             | 0 = BUY, 1 = SELL                     |
+|      1 |    8 | price            | fixed-point (× 10⁸)                   |
+|      9 |    8 | aggregateQty     | 0 means the level was removed         |
+|     17 |    4 | orderCount       | number of resting orders at the level |
+
+### TRADE payload (41 bytes)
+
+| offset | size | field            |
+|--------|------|------------------|
+|      0 |    8 | takerOrderId     |
+|      8 |    8 | makerOrderId     |
+|     16 |    1 | takerSide        |
+|     17 |    8 | price            |
+|     25 |    8 | quantity         |
+|     33 |    8 | timestampNanos   |
+
+### SNAPSHOT payload
+
+Header (14 bytes), followed by `levelCount` level entries (21 bytes each):
+
+| offset | size | field            | notes                                     |
+|--------|------|------------------|-------------------------------------------|
+|      0 |    8 | startingSequence | feed sequence of the last update reflected in this snapshot; consumers use it to know where to resume applying incremental updates |
+|      8 |    2 | partNumber       | 1-based                                   |
+|     10 |    2 | totalParts       | total number of SNAPSHOT datagrams for this snapshot (all parts share the same `startingSequence`) |
+|     12 |    2 | levelCount       | number of level entries in this part      |
+
+Level entry layout (identical to a BOOK_UPDATE payload):
+
+| offset | size | field            |
+|--------|------|------------------|
+|      0 |    1 | side             |
+|      1 |    8 | price            |
+|      9 |    8 | aggregateQty     |
+|     17 |    4 | orderCount       |
+
+Snapshots emit bids first (best-first) then asks (best-first). Consumers replace their local book state entirely when a snapshot completes.
+
+### HEARTBEAT payload (0 bytes)
+
+Just the 8-byte sequence + 1-byte type + 4-byte CRC. Sent when no other traffic is occurring so consumers can distinguish "idle but alive" from "publisher died."
+
+### Gap detection + recovery flow
+
+1. Consumer reads packets and tracks the last-seen feed sequence `S`.
+2. On receiving a packet whose sequence is `S + 1`, apply normally.
+3. On receiving a packet whose sequence is `> S + 1`, a gap occurred. Buffer the new packet, then wait for the next SNAPSHOT. The snapshot's `startingSequence` tells the consumer which updates are already included; buffered incrementals with sequence ≤ `startingSequence` are discarded, and incrementals above it are replayed against the new snapshot state.
+
+### Multicast group conventions
+
+- **Group address**: from the admin-scoped range `239.0.0.0/8`. Tests and local dev use `239.200.3.x`.
+- **Port**: configured per instrument or per engine process.
+- **Interface**: the publisher must call `setOption(IP_MULTICAST_IF, ...)` with a concrete interface (macOS does not reliably route on the default interface).
+- **TTL**: default 1 (link-local). Override only for cross-subnet deployments.
+- **Loopback**: `IP_MULTICAST_LOOP = true` so the publisher JVM can also run a local subscriber (useful for integration tests; production disables).
+
+---
+
+*Later slices will extend this document with any additional formats (e.g., cross-instrument admin commands).*

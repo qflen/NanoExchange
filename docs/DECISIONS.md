@@ -263,3 +263,26 @@ Both read and write buffers are `ByteBuffer.allocateDirect` at connection time a
 - The selector thread never blocks on engine work — the worst it can do to order-entry latency is a dropped frame if the ring buffer to the engine is full (which we handle by backpressuring the client).
 - Outbound writes can stall when a slow client causes socket-level backpressure. The gateway registers `OP_WRITE` in that case and resumes draining when the socket accepts more bytes. Pending outbound bytes are bounded by the per-session write buffer; overflow forces a disconnect, which is the correct policy for a slow client that can't keep up with the feed it subscribed to.
 - The session-assigned `clientId` is authoritative. A client may include a clientId in its NEW_ORDER wire payload (useful for their own bookkeeping), but the gateway overwrites it with the session-bound value before forwarding — clients cannot spoof another account by putting that account's clientId in the frame. STP correctness depends on this.
+
+---
+
+## ADR-012: UDP multicast with snapshot + incremental for market data
+
+**Status:** Accepted — slice 5
+
+**Context.** Market data needs to fan out to many subscribers (humans, strategies, feed-replay tools) without the publisher maintaining a per-subscriber connection. Real exchanges solve this with UDP multicast: the publisher sends one datagram, the network replicates it to every subscriber who joined the group. This scales to hundreds of subscribers without affecting publisher CPU or state.
+
+The downside of UDP is that it's lossy. A dropped packet is a real possibility over any non-trivial network, and a book state reconstructed from lossy incrementals will diverge from the exchange's view silently. Exchanges handle this with a periodic **snapshot**: a full-state datagram (or series of datagrams) stamped with the sequence number of the last update it reflects, so a consumer that missed packets can resync at a known boundary.
+
+**Decision.** Market data is published over UDP multicast. The feed carries four message types: BOOK_UPDATE (aggregate level change), TRADE (a match), SNAPSHOT (periodic full book), and HEARTBEAT (liveness tick).
+
+A single monotonic `feedSequence` is stamped onto every outbound datagram — across all message types, not per-type. Gaps in this sequence are how consumers detect dropped packets. Each SNAPSHOT carries the sequence of the last update it reflects (`startingSequence`), so a recovering consumer knows exactly where to resume applying incrementals.
+
+Datagrams are sized to fit within the Ethernet MTU (1472 bytes). When a snapshot exceeds that (deep books), it splits across multiple parts using a `partNumber` / `totalParts` header.
+
+**Consequences.**
+- Subscribers scale out transparently. One publisher serves hundreds of consumers at the cost of a single multicast send per message.
+- Consumers that lose packets recover deterministically by waiting for the next snapshot; no publisher-side state is involved.
+- Snapshot frequency trades off recovery latency against bandwidth. A 1-second interval (default) gives recovery within ~1s while costing at most a few hundred KB of bandwidth per second for a liquid book.
+- MTU awareness is a hard requirement; fragmentation in the IP layer would raise drop rates and hurt the whole feed. The builder enforces per-datagram size at encode time.
+- Tests run on loopback (`239.200.3.x` with `IP_MULTICAST_LOOP` enabled). Production deployments must configure the multicast interface and TTL explicitly because macOS and Linux default differently — the publisher API forces the caller to supply a `NetworkInterface` rather than silently defaulting to whatever the kernel picks.

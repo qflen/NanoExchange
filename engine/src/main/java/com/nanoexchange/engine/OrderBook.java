@@ -74,6 +74,17 @@ public final class OrderBook {
         return l == null ? Long.MAX_VALUE : l.price;
     }
 
+    /** @return number of resting orders at the bid-side level of rank {@code depth}, or 0. */
+    public int bidOrderCountAtDepth(int depth) {
+        PriceLevel l = bids.levelAtDepth(depth);
+        return l == null ? 0 : l.orderCount;
+    }
+
+    public int askOrderCountAtDepth(int depth) {
+        PriceLevel l = asks.levelAtDepth(depth);
+        return l == null ? 0 : l.orderCount;
+    }
+
     /** @return the resting order for {@code orderId}, or {@code null} if not present. */
     public Order lookup(long orderId) {
         return orderIndex.get(orderId);
