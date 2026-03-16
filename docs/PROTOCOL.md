@@ -283,4 +283,20 @@ Just the 8-byte sequence + 1-byte type + 4-byte CRC. Sent when no other traffic 
 
 ---
 
+## 4. Python client mirror
+
+The Python client (`client/src/nanoexchange_client/`) implements the same wire format using `struct.Struct` format strings. Byte-level correspondence:
+
+| Java | Python |
+|------|--------|
+| `putLong` (8 bytes LE) | `q` |
+| `putInt`  (4 bytes LE) | `i` / `I` |
+| `putShort` (2 bytes LE) | `h` |
+| `put` (1 byte) | `b` / `B` |
+| `ByteOrder.LITTLE_ENDIAN`, packed | `<` prefix (no native alignment) |
+
+Payload layouts in `protocol.py` / `feed.py` mirror the tables above exactly. Slice 13 adds a cross-language consistency test that generates frames from both stacks and asserts byte-for-byte equality; until then this spec is the source of truth and any Java-side change must be mirrored into the Python module in the same commit.
+
+---
+
 *Later slices will extend this document with any additional formats (e.g., cross-instrument admin commands).*

@@ -1,3 +1,11 @@
+plugins {
+    application
+}
+
+application {
+    mainClass.set("com.nanoexchange.network.ExchangeServer")
+}
+
 dependencies {
     implementation(project(":engine"))
 

@@ -286,3 +286,27 @@ Datagrams are sized to fit within the Ethernet MTU (1472 bytes). When a snapshot
 - Snapshot frequency trades off recovery latency against bandwidth. A 1-second interval (default) gives recovery within ~1s while costing at most a few hundred KB of bandwidth per second for a liquid book.
 - MTU awareness is a hard requirement; fragmentation in the IP layer would raise drop rates and hurt the whole feed. The builder enforces per-datagram size at encode time.
 - Tests run on loopback (`239.200.3.x` with `IP_MULTICAST_LOOP` enabled). Production deployments must configure the multicast interface and TTL explicitly because macOS and Linux default differently — the publisher API forces the caller to supply a `NetworkInterface` rather than silently defaulting to whatever the kernel picks.
+
+---
+
+## ADR-013: Python client mirrors the Java wire protocol via `struct` format strings
+
+**Status:** Accepted — slice 6
+
+**Context.** The project has two independent encoder/decoder implementations of the same wire protocols: Java (`WireCodec`, `FeedCodec`) on the exchange side, Python (`protocol.py`, `feed.py`) on the client side. A drift between them — a field reordered, a padding byte hallucinated, a length miscounted — would only surface as hard-to-diagnose connectivity failures. The canonical protocol is documented in `docs/PROTOCOL.md` but a prose spec is not machine-checkable.
+
+Two choices offered themselves for the Python side:
+
+1. **Hand-rolled byte manipulation** (e.g. `int.from_bytes` per field). Explicit, but verbose and easy to desync from the Java layout by hand.
+2. **`struct` format strings.** Declarative, one string per payload, and trivially eyeballable against the Java `ByteBuffer.putLong`/`put` sequence. Byte-for-byte deterministic because format strings explicitly suppress native alignment (`<` prefix).
+
+**Decision.** Python payloads are encoded via `struct.Struct("<…")` format strings, one per message type, mirroring the Java layout. Format strings live at the top of `protocol.py` / `feed.py` next to the Java code they mirror, so a reader can eyeball the two layouts side by side.
+
+Frame-level framing (length prefix for TCP, CRC for both transports) is still done in Python code rather than a format string, because the CRC covers a dynamic-length region.
+
+Cross-language byte equality is **not** enforced per slice (would slow unit tests and confuse local development). Instead, slice 13 adds a dedicated consistency test that generates the same messages from both stacks and asserts the bytes are identical. Until then, the Java + Python unit tests share a spec (`docs/PROTOCOL.md`) as the source of truth.
+
+**Consequences.**
+- Adding a new wire message requires editing two files (Java + Python) plus `docs/PROTOCOL.md`. That is by design — the spec should be updated first, then the two implementations.
+- A `struct` format string will not catch all drift on its own (e.g. if someone reorders fields consistently in both languages but the spec says otherwise); the slice-13 cross-language test closes that loop.
+- Python 3.14 is the assumed target; `struct.Struct` has been stable since Python 3, so there is no version risk.
