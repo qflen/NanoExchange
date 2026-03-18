@@ -22,3 +22,8 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+
+# Analytics generated outputs (reproducible via `make analytics`)
+analytics/outputs/*.html
+analytics/outputs/*.png
+bench/load_results.*

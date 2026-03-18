@@ -310,3 +310,26 @@ Cross-language byte equality is **not** enforced per slice (would slow unit test
 - Adding a new wire message requires editing two files (Java + Python) plus `docs/PROTOCOL.md`. That is by design — the spec should be updated first, then the two implementations.
 - A `struct` format string will not catch all drift on its own (e.g. if someone reorders fields consistently in both languages but the spec says otherwise); the slice-13 cross-language test closes that loop.
 - Python 3.14 is the assumed target; `struct.Struct` has been stable since Python 3, so there is no version risk.
+
+---
+
+## ADR-014: Analytics operate on an external journal format; Java-side journaling is opt-in
+
+**Status:** Accepted — slice 8
+
+**Context.** Slice 3 built a memory-mapped journal (`Journal` in `engine/`) with a well-defined binary format. Slice 8 adds Python analytics whose natural input is that same journal. The shortest path to "we can replay a day of flow and compute VPIN over it" would be to wire `Journal` into `ExchangeServer` unconditionally so every run produces a journal file.
+
+Two problems with that.
+
+1. Journaling every record synchronously in the hot path adds `CRC32.update` per record and a memcpy into the mapped region. The benchmarks in §3 of `PERFORMANCE.md` do not currently include journaling overhead; if we enable it by default, the documented numbers become either incorrect or require a second column. That is a larger change than the slice needs.
+2. The most immediate portfolio artefact (the simulator's PnL + latency chart) does not actually need a journal at all — the simulator has the send/receive timestamps in hand.
+
+**Decision.** Slice 8 ships a journal *reader* (`journal_reader.py`) that parses Java-format journals, plus a *writer* usable by tests and the simulator. The `ExchangeServer` itself is not modified — journaling remains available as a class that a future CLI flag or slice can enable. The analytics CLI (`nx-analytics`) computes its artefacts from the simulator's in-memory run.
+
+Three downstream consequences:
+
+- **The VPIN test uses synthesised tape**, not a live-engine journal. That is the right level for a unit test anyway — a deterministic known-answer case rather than a live-data regression.
+- **When ExchangeServer opt-in journaling lands** (expected alongside slice 13's ops polish), the existing `journal_reader` is already its intended consumer; no Python-side changes are needed.
+- **Simulator latency histograms** come from the simulator's own timestamps, not from a journal. The `latency_analyzer` module accepts any `(send_ts, recv_ts)` stream, so the shape of the histogram is independent of the timestamp source.
+
+**Consequences.** The shortest-path integration is deferred; in exchange, slice 7's benchmark numbers remain valid as documented, and slice 8 stays self-contained and testable without a live engine.
