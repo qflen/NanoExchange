@@ -333,3 +333,28 @@ Three downstream consequences:
 - **Simulator latency histograms** come from the simulator's own timestamps, not from a journal. The `latency_analyzer` module accepts any `(send_ts, recv_ts)` stream, so the shape of the histogram is independent of the timestamp source.
 
 **Consequences.** The shortest-path integration is deferred; in exchange, slice 7's benchmark numbers remain valid as documented, and slice 8 stays self-contained and testable without a live engine.
+
+
+---
+
+## ADR-015: WebSocket bridge batches per-client on a 16 ms window, drops oldest on backpressure
+
+**Status:** Accepted — slice 9
+
+**Context.** The feed arrives as UDP multicast at whatever rate the engine publishes (tens of thousands of updates/second under load). The browser cannot usefully repaint faster than its refresh rate, and even that is wasted work if most updates hit the same price level. A naïve pipeline — forward every datagram to every connected WebSocket as its own frame — would saturate both the browser event loop and the socket buffer under load. Two independent questions had to be answered:
+
+1. **Where does coalescing happen, and over what window?**
+2. **What does the bridge do when a specific client cannot keep up?**
+
+**Decisions.**
+
+1. **Per-client, per-window coalescing at ≈ 60 Hz (16 ms).** Each connected session owns its own `Batcher`. The UDP reader fans out every decoded message into every client's batcher; a per-client flush task wakes every 16 ms, snapshots the window, and enqueues one JSON frame to that client's outbox. Book updates are keyed by `(side, price)` — the latest update wins. Trades and exec reports are never coalesced (each is a distinct event). A snapshot supersedes pending book updates in the same window, because the snapshot is authoritative state and any deltas before it are stale. 16 ms is chosen to align roughly with `requestAnimationFrame` on a 60 Hz display; the dashboard (slice 10) applies messages on rAF so anything smaller is discarded anyway.
+
+2. **Bounded outbox per client, drop-oldest on overflow, surface a `degraded` flag.** Each session has an `asyncio.Queue(maxsize=64)`. When full, the flush task drops the oldest frame, enqueues the latest, and sets a `degraded` bit that is attached to the next successful send. This gives the UI a chance to warn the user ("your connection is lagging") rather than silently drifting from true state. The alternative — letting the queue grow unboundedly, or waiting for `put()` — would couple one slow client to the speed of the rest. A disconnected, wedged TCP socket could then stall the flush loop of every other client sharing the UDP reader.
+
+**Consequences.**
+
+- The browser sees at most one frame per 16 ms per client, regardless of upstream rate. Under steady state that frame is small (one entry per modified level, trades appended, etc.).
+- A client with a slow network loses older book updates, not the newest state. For an order-book UI, this is the right trade: the old mid was already overwritten. We do **not** drop trades or exec reports inside the batcher; they are list-appended and flushed in order.
+- The per-client batcher copies the coalesced state on flush, so even if the WS writer is slow, the UDP reader continues to fold updates into the still-owned window. Memory is bounded by (number of live price levels × number of clients), which is small.
+- **macOS loopback multicast requires naming the interface explicitly.** `IP_ADD_MEMBERSHIP` with `INADDR_ANY` works on Linux but silently drops loopback traffic on darwin. The bridge exposes `--multicast-interface` so local development can pass `127.0.0.1`; Linux containers leave it unset. This is an environmental footgun rather than a design choice, but worth writing down so the next person asking "why does my local feed go dark on mac" gets the answer in one grep.
