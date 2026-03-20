@@ -6,17 +6,19 @@ batching. Threads-of-life:
 
 * **UDP reader** — multicast feed → decode → translator → fan-out into
   each connected client's :class:`Batcher`.
-* **TCP reader** (optional) — maintains an ``OrderClient`` for each
-  browser that is *also* submitting orders. A plain viewer doesn't need
-  one. Exec reports that come back are routed to the originating WS.
-* **WS handler** — runs per connection. On connect, create a batcher
-  and a queue. The flush task wakes every 16 ms, pulls the latest
-  batch, writes it. On disconnect, clean up.
+* **WS handler** — runs per connection. On connect, create a batcher,
+  an outbox queue, and (if the order gateway is wired) a dedicated
+  ``OrderClient`` TCP connection so the browser can submit orders and
+  receive its own execution reports.
+* **Flush loop** — wakes every 16 ms per client, pulls the latest
+  batch from the batcher, enqueues it on the outbox.
+* **Writer loop** — drains the outbox onto the WS.
+* **Reports loop** (when OrderClient is attached) — reads exec reports
+  from the gateway TCP socket and folds them into the session's
+  batcher so they ride out on the next flush.
 
-Per-client queues are *bounded* and ``drop-oldest``: a slow client must
-not block the fast ones. Slice 9's spec: drop oldest and mark the
-client degraded. We surface "degraded" in an application-level message
-so the UI can show a warning banner.
+Per-client queues are *bounded* and ``drop-oldest``: a slow client
+must not block the fast ones. See ADR-015.
 """
 
 from __future__ import annotations
@@ -33,9 +35,14 @@ import orjson
 import websockets
 
 from nanoexchange_client.feed import decode_datagram
+from nanoexchange_client.order_client import OrderClient
 
 from .batcher import Batcher
-from .translator import translate_feed_message
+from .translator import (
+    order_from_json,
+    translate_exec_report,
+    translate_feed_message,
+)
 
 log = logging.getLogger("nx.bridge")
 
@@ -48,15 +55,19 @@ class ClientSession:
     """One connected browser. ``eq=False`` keeps the default
     identity-based hash so sessions can go into a ``set``."""
     ws: Any
+    client_id: int = 0
     batcher: Batcher = field(default_factory=Batcher)
     outbox: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=QUEUE_MAX))
     degraded: bool = False
+    order_client: OrderClient | None = None
 
 
 class Bridge:
     def __init__(self, *, multicast_group: str, multicast_port: str | int,
                  ws_host: str, ws_port: int,
-                 multicast_interface: str | None = None) -> None:
+                 multicast_interface: str | None = None,
+                 order_gw_host: str | None = None,
+                 order_gw_port: int | None = None) -> None:
         self.multicast_group = multicast_group
         self.multicast_port = int(multicast_port)
         self.ws_host = ws_host
@@ -65,7 +76,14 @@ class Bridge:
         # interface (127.0.0.1). Linux handles INADDR_ANY. We default to
         # None (INADDR_ANY) and let the caller override for local dev.
         self.multicast_interface = multicast_interface
+        # Order gateway is optional: a bridge running in "view-only"
+        # mode (public market-data viewer) doesn't need one. When
+        # absent, any inbound new_order/cancel_order from the browser
+        # gets a reject notice rather than a silent drop.
+        self.order_gw_host = order_gw_host
+        self.order_gw_port = order_gw_port
         self._clients: set[ClientSession] = set()
+        self._next_client_id = 1
 
     async def serve(self) -> None:
         udp_task = asyncio.create_task(self._run_udp_reader())
@@ -103,26 +121,118 @@ class Bridge:
     # --- WS side ------------------------------------------------------------
 
     async def _handle_ws(self, ws) -> None:
-        session = ClientSession(ws=ws)
+        client_id = self._next_client_id
+        self._next_client_id += 1
+        session = ClientSession(ws=ws, client_id=client_id)
         self._clients.add(session)
-        log.info("ws connect, %d clients total", len(self._clients))
+        log.info("ws connect id=%d, %d clients total",
+                 client_id, len(self._clients))
+
+        order_client: OrderClient | None = None
+        reports_task: asyncio.Task | None = None
+        if self.order_gw_host is not None and self.order_gw_port is not None:
+            try:
+                order_client = OrderClient(
+                    self.order_gw_host, self.order_gw_port, client_id=client_id,
+                )
+                await order_client.connect()
+                session.order_client = order_client
+                reports_task = asyncio.create_task(
+                    self._reports_loop(session, order_client)
+                )
+            except Exception as exc:
+                log.warning("order client connect failed: %s", exc)
+                order_client = None
+
         flush_task = asyncio.create_task(self._flush_loop(session))
         writer_task = asyncio.create_task(self._writer_loop(session))
+
+        # Tell the browser its client_id — it uses it to stamp order IDs.
         try:
-            async for _raw in ws:
-                # Inbound orders from the browser are out of scope for the
-                # batcher — would need an OrderClient per browser. Slice 10+.
-                # For now, politely echo a notice.
-                await ws.send(orjson.dumps(
-                    {"type": "notice", "message": "order entry not wired yet"}
-                ).decode())
+            await ws.send(orjson.dumps(
+                {"type": "hello", "client_id": client_id,
+                 "orders_enabled": order_client is not None}
+            ).decode())
+        except websockets.ConnectionClosed:
+            pass
+
+        try:
+            async for raw in ws:
+                await self._handle_inbound(session, raw)
         except websockets.ConnectionClosed:
             pass
         finally:
             self._clients.discard(session)
             flush_task.cancel()
             writer_task.cancel()
-            log.info("ws disconnect, %d clients total", len(self._clients))
+            if reports_task is not None:
+                reports_task.cancel()
+            if order_client is not None:
+                try:
+                    await order_client.close()
+                except Exception:
+                    pass
+            log.info("ws disconnect id=%d, %d clients total",
+                     client_id, len(self._clients))
+
+    async def _handle_inbound(self, session: ClientSession, raw: Any) -> None:
+        try:
+            payload = orjson.loads(raw)
+        except orjson.JSONDecodeError:
+            await _send_notice(session.ws, "malformed JSON")
+            return
+        msg_type = payload.get("type")
+        if msg_type == "new_order":
+            if session.order_client is None:
+                await _send_notice(session.ws, "order gateway not configured")
+                return
+            try:
+                parsed = order_from_json(payload)
+            except (KeyError, ValueError) as exc:
+                await _send_notice(session.ws, f"invalid order: {exc}")
+                return
+            try:
+                await session.order_client.submit_new_order(
+                    order_id=parsed["order_id"],
+                    side=parsed["side"],
+                    order_type=parsed["order_type"],
+                    price=parsed["price"],
+                    quantity=parsed["quantity"],
+                    display_size=parsed["display_size"],
+                    timestamp_nanos=parsed["timestamp_nanos"],
+                )
+            except (ConnectionError, OSError) as exc:
+                await _send_notice(session.ws, f"order gateway error: {exc}")
+        elif msg_type == "cancel_order":
+            if session.order_client is None:
+                await _send_notice(session.ws, "order gateway not configured")
+                return
+            try:
+                await session.order_client.cancel(
+                    order_id=int(payload["order_id"]),
+                    timestamp_nanos=int(payload.get("timestamp_nanos", 0)),
+                )
+            except (ConnectionError, OSError, KeyError) as exc:
+                await _send_notice(session.ws, f"cancel failed: {exc}")
+        elif msg_type == "ping":
+            await _send_notice(session.ws, "pong")
+        else:
+            await _send_notice(session.ws, f"unknown type: {msg_type!r}")
+
+    async def _reports_loop(
+        self, session: ClientSession, order_client: OrderClient,
+    ) -> None:
+        try:
+            async for frame in order_client.reports():
+                translated = translate_exec_report(frame)
+                if translated is None:
+                    continue
+                session.batcher.add(translated)
+        except asyncio.CancelledError:
+            raise
+        except ConnectionError as exc:
+            log.info("order reports loop ended for id=%d: %s",
+                     session.client_id, exc)
 
     async def _flush_loop(self, session: ClientSession) -> None:
         while True:
@@ -153,6 +263,15 @@ class Bridge:
                 await session.ws.send(orjson.dumps(message).decode())
             except websockets.ConnectionClosed:
                 return
+
+
+async def _send_notice(ws: Any, text: str) -> None:
+    try:
+        await ws.send(orjson.dumps(
+            {"type": "notice", "message": text}
+        ).decode())
+    except websockets.ConnectionClosed:
+        pass
 
 
 def _make_multicast_socket(
@@ -186,6 +305,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--ws-port", type=int, default=8765)
     p.add_argument("--multicast-interface", default=None,
                    help="Local IP of NIC for multicast (macOS loopback: 127.0.0.1)")
+    p.add_argument("--order-gw-host", default=None,
+                   help="TCP host of the order gateway; omit to run view-only")
+    p.add_argument("--order-gw-port", type=int, default=None)
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -195,6 +317,8 @@ def main(argv: list[str] | None = None) -> int:
         ws_host=args.ws_host,
         ws_port=args.ws_port,
         multicast_interface=args.multicast_interface,
+        order_gw_host=args.order_gw_host,
+        order_gw_port=args.order_gw_port,
     )
     asyncio.run(bridge.serve())
     return 0

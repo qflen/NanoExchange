@@ -1,19 +1,12 @@
-import { createContext, useContext, useReducer, useEffect, useRef } from "react";
+import { useContext, useReducer, useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 import {
   exchangeReducer,
   initialExchangeState,
-  type ExchangeState,
 } from "./exchangeReducer";
+import { ExchangeContext, type ExchangeContextValue } from "./exchangeContextInternal";
 import { useWebSocket } from "../hooks/useWebSocket";
 import type { ServerMsg } from "../types";
-
-interface ExchangeContextValue {
-  state: ExchangeState;
-  send: (payload: unknown) => void;
-}
-
-const ExchangeContext = createContext<ExchangeContextValue | null>(null);
 
 interface ProviderProps {
   wsUrl: string;
@@ -50,8 +43,9 @@ export function ExchangeProvider({ wsUrl, children }: ProviderProps) {
     }
   };
 
+  const value: ExchangeContextValue = { state, send };
   return (
-    <ExchangeContext.Provider value={{ state, send }}>
+    <ExchangeContext.Provider value={value}>
       {children}
     </ExchangeContext.Provider>
   );

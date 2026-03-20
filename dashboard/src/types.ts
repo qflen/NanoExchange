@@ -36,9 +36,17 @@ export interface SnapshotMsg {
   levels: SnapshotLevel[];
 }
 
+export type ReportType =
+  | "ACK"
+  | "PARTIAL_FILL"
+  | "FILL"
+  | "CANCELED"
+  | "REJECTED"
+  | "MODIFIED";
+
 export interface ExecReportMsg {
   type: "exec_report";
-  report_type: "NEW_ACK" | "PARTIAL_FILL" | "FILL" | "CANCEL_ACK" | "REJECT";
+  report_type: ReportType;
   order_id: number;
   client_id: number;
   side: Side;

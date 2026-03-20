@@ -70,6 +70,9 @@ async def test_bridge_forwards_udp_book_update_to_ws():
 
     try:
         async with websockets.connect(f"ws://127.0.0.1:{ws_port}") as ws:
+            # Consume the greeting so the batch is next.
+            hello = orjson.loads(await asyncio.wait_for(ws.recv(), timeout=1.0))
+            assert hello["type"] == "hello"
             # Give the server time to register this client before we publish.
             await asyncio.sleep(0.05)
             payload = struct.pack("<Bqqi", 0, 100_00000000, 250, 1)
@@ -117,6 +120,10 @@ async def test_bridge_coalesces_book_updates_within_window():
                          socket.inet_aton("127.0.0.1"))
     try:
         async with websockets.connect(f"ws://127.0.0.1:{ws_port}") as ws:
+            # Drain the greeting frame.
+            assert orjson.loads(
+                await asyncio.wait_for(ws.recv(), timeout=1.0)
+            )["type"] == "hello"
             await asyncio.sleep(0.05)
             # 20 updates at the same (side, price) — should coalesce to one.
             for i in range(20):

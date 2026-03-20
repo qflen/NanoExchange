@@ -101,9 +101,9 @@ function applyExec(
         ? "FILLED"
         : exec.report_type === "PARTIAL_FILL"
           ? "PARTIAL"
-          : exec.report_type === "CANCEL_ACK"
+          : exec.report_type === "CANCELED"
             ? "CANCELLED"
-            : exec.report_type === "REJECT"
+            : exec.report_type === "REJECTED"
               ? "REJECTED"
               : "OPEN",
   };

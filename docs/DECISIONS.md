@@ -385,3 +385,32 @@ Three downstream consequences:
 - Under StrictMode (dev-only) the effect runs twice. The cleanup closes the first socket and cancels its rAF loop before the second connects — no duplicate dispatches leak.
 - A disconnect triggers a 1 s fixed-delay reconnect. Exponential backoff is overkill here (the bridge is on localhost in dev, same datacenter in prod); a constant retry keeps the "OFFLINE → LIVE" banner reactive.
 - Book-update state uses `Record<number, number>` rather than `Map`. React's referential comparison trips over `Map` mutations; a freshly-constructed record object each reducer step gives memoised selectors clean inputs. The allocation is cheap relative to the render cost a bad equality check would cause.
+
+
+---
+
+## ADR-017: Bridge opens one TCP `OrderClient` per browser session; exec reports fold into the same batch stream
+
+**Status:** Accepted — slice 11
+
+**Context.** Slice 11 lets a browser submit and cancel orders from the dashboard. Two options for how the bridge routes orders to the matching engine:
+
+1. **One shared TCP connection, fan-out by `client_id`.** The bridge keeps a single gateway connection, stamps each inbound order with the session's client_id, and when an exec report comes back, finds the right session by looking up client_id in a map. Lightweight but fragile — a dropped gateway socket affects every session; heads-of-line blocking on the send path slows unrelated clients.
+2. **One TCP connection per session.** Each browser gets its own `OrderClient` with its own client_id, its own send path, and its own reports reader. A wedged session affects only itself; the gateway's existing per-client framing assumption stays intact.
+
+**Decision.** Option 2. On WS connect, if `--order-gw-host/--order-gw-port` are configured, the bridge opens a dedicated `OrderClient` for that session and stamps it with a monotonically-increasing `client_id`. The session's reports loop translates each exec frame and enqueues it on the session's `Batcher`, which means reports ride out on the next 16 ms flush alongside the feed — the browser sees one JSON frame per window containing everything that happened in that tick.
+
+**Why enqueue into the batcher instead of a separate "exec" WS channel.**
+
+- The dashboard reducer already merges book updates and exec reports by time order inside a batch. One channel keeps the rAF-aligned dispatch model: receive one message per frame, apply it, render once.
+- Degraded-client semantics (ADR-015) apply uniformly. If the outbox fills, the oldest frame is dropped; exec reports do not get a privileged queue that could fill the socket while feed updates starve. The user-visible invariant is: "if you're degraded, you might be looking at slightly stale state, including stale order status." That's the honest message to show in the UI.
+
+**Client_id sourcing.** The browser receives its `client_id` in the `hello` frame sent right after connect. Order-entry forms don't need to know it — `useOrderSubmit` mints its own per-page ascending order_ids — but it's available for diagnostic overlays and for routing any out-of-band mutations. `order_id` generation is entirely browser-side: a millisecond-seeded counter. The gateway treats (client_id, order_id) as a composite unique key, so two browsers can safely pick the same order_id.
+
+**"View-only" mode still works.** If neither `--order-gw-host` nor `--order-gw-port` is set, the bridge runs without order forwarding; inbound `new_order`/`cancel_order` messages are answered with a `notice` explaining the gateway is not configured. The dashboard's "hello" includes `orders_enabled: false` so the UI can disable its order-entry controls deterministically rather than timing out on submit.
+
+**Consequences.**
+
+- One TCP connection per browser is N more sockets on the engine side. In practice this is bounded by concurrent dashboard users (single-digit), not by multicast fanout. If the bound grows, the hard choice (multiplex over one TCP) becomes attractive — but today's users do not justify the engineering cost.
+- Tests stub the gateway by opening a plain asyncio TCP server that decodes NEW_ORDER frames (hand-written format string mirroring the Java side) and replies with a PARTIAL_FILL. The reference wire format lives in `docs/PROTOCOL.md`; both the engine and this test-side parser mirror it independently. The slice-13 cross-language consistency check (ADR-013) will catch drift.
+- A future order-entry slice that supports modify can add a third inbound type without touching the routing layer — all of this hangs off `_handle_inbound` dispatch.

@@ -1,11 +1,10 @@
 import { ConnectionStatus } from "./components/ConnectionStatus";
 import { OrderBookLadder } from "./components/OrderBookLadder";
 import { DepthChart } from "./components/DepthChart";
+import { TradeTape } from "./components/TradeTape";
+import { PriceChart } from "./components/PriceChart";
+import { OrderEntry } from "./components/OrderEntry";
 
-// Grid slots reserve real estate for panels that land in later slices
-// (trade tape, price chart, order entry, latency monitor, metrics).
-// Empty slots render a placeholder so the page layout is stable from
-// day one.
 export function App() {
   return (
     <div className="h-screen flex flex-col">
@@ -22,24 +21,18 @@ export function App() {
         <section className="col-span-3 row-span-6 min-h-0">
           <OrderBookLadder />
         </section>
-        <section className="col-span-6 row-span-4 min-h-0">
+        <section className="col-span-6 row-span-3 min-h-0">
+          <PriceChart />
+        </section>
+        <section className="col-span-3 row-span-4 min-h-0">
+          <OrderEntry />
+        </section>
+        <section className="col-span-6 row-span-3 min-h-0">
           <DepthChart />
         </section>
-        <Placeholder
-          className="col-span-3 row-span-4"
-          title="Price"
-          subtitle="coming in slice 11"
-        />
-        <Placeholder
-          className="col-span-3 row-span-2"
-          title="Trade Tape"
-          subtitle="coming in slice 11"
-        />
-        <Placeholder
-          className="col-span-3 row-span-2"
-          title="Order Entry"
-          subtitle="coming in slice 11"
-        />
+        <section className="col-span-3 row-span-2 min-h-0">
+          <TradeTape />
+        </section>
         <Placeholder
           className="col-span-3 row-span-2"
           title="Metrics"
