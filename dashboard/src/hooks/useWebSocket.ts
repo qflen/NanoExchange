@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type MutableRefObject } from "react";
 import type { ServerMsg } from "../types";
 
 export interface WebSocketHookOptions {
@@ -6,6 +6,9 @@ export interface WebSocketHookOptions {
   onMessage: (msg: ServerMsg) => void;
   onOpen?: () => void;
   onClose?: () => void;
+  // Optional out-ref: the hook publishes the live socket here so other
+  // code (the order simulator) can read `bufferedAmount` for back-pressure.
+  sockRef?: MutableRefObject<WebSocket | null>;
 }
 
 /**
@@ -54,6 +57,7 @@ export function useWebSocket(options: WebSocketHookOptions): void {
     const connect = () => {
       if (cancelled) return;
       ws = new WebSocket(url);
+      if (options.sockRef) options.sockRef.current = ws;
       ws.onopen = () => onOpenRef.current?.();
       ws.onmessage = (ev) => {
         // Never dispatch inside onmessage. Enqueue for rAF drain.
@@ -87,6 +91,7 @@ export function useWebSocket(options: WebSocketHookOptions): void {
         ws.onerror = null;
         ws.close();
       }
+      if (options.sockRef) options.sockRef.current = null;
     };
   }, [url]);
 }

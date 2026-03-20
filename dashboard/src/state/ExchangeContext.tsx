@@ -1,4 +1,4 @@
-import { useContext, useReducer, useEffect, useRef } from "react";
+import { useContext, useReducer, useRef } from "react";
 import type { ReactNode } from "react";
 import {
   exchangeReducer,
@@ -16,18 +16,17 @@ interface ProviderProps {
 export function ExchangeProvider({ wsUrl, children }: ProviderProps) {
   const [state, dispatch] = useReducer(exchangeReducer, initialExchangeState);
 
-  // Socket handle kept in a ref — the provider owns sending; children
-  // post via the context's `send`.
+  // useWebSocket owns connection lifecycle and reconnect; it publishes
+  // the live socket here so `send` and the simulator's back-pressure
+  // check can use the same connection. Earlier this provider opened a
+  // second WebSocket of its own — order entry sent on socket A while
+  // book updates arrived on socket B, which worked only because the
+  // bridge happened to broadcast. One socket per provider, period.
   const sockRef = useRef<WebSocket | null>(null);
-
-  useEffect(() => {
-    const ws = new WebSocket(wsUrl);
-    sockRef.current = ws;
-    return () => ws.close();
-  }, [wsUrl]);
 
   useWebSocket({
     url: wsUrl,
+    sockRef,
     onOpen: () => dispatch({ type: "connection/open" }),
     onClose: () => dispatch({ type: "connection/close" }),
     onMessage: (msg: ServerMsg) => {
@@ -43,7 +42,7 @@ export function ExchangeProvider({ wsUrl, children }: ProviderProps) {
     }
   };
 
-  const value: ExchangeContextValue = { state, send };
+  const value: ExchangeContextValue = { state, send, sockRef };
   return (
     <ExchangeContext.Provider value={value}>
       {children}
