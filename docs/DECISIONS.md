@@ -414,3 +414,29 @@ Three downstream consequences:
 - One TCP connection per browser is N more sockets on the engine side. In practice this is bounded by concurrent dashboard users (single-digit), not by multicast fanout. If the bound grows, the hard choice (multiplex over one TCP) becomes attractive — but today's users do not justify the engineering cost.
 - Tests stub the gateway by opening a plain asyncio TCP server that decodes NEW_ORDER frames (hand-written format string mirroring the Java side) and replies with a PARTIAL_FILL. The reference wire format lives in `docs/PROTOCOL.md`; both the engine and this test-side parser mirror it independently. The slice-13 cross-language consistency check (ADR-013) will catch drift.
 - A future order-entry slice that supports modify can add a third inbound type without touching the routing layer — all of this hangs off `_handle_inbound` dispatch.
+
+
+---
+
+## ADR-018: Frame-rate instrumentation via `useSyncExternalStore`; virtualisation by level count
+
+**Status:** Accepted — slice 12
+
+**Context.** The dashboard is now read-write (slice 11). "Smooth at 10 k msg/s" is a claim the portfolio makes; slice 12 exists to make it *measurable*. Two specific questions needed answers:
+
+1. How do we instrument frame-level performance without distorting it?
+2. At what point does the fixed-window order-book ladder stop being fast enough, and what replaces it?
+
+**Decisions.**
+
+1. **Frame-duration sampling via `useSyncExternalStore`, not React state.** The frame sampler writes into a module-level ring buffer and a set of subscribers. The `LatencyMonitor` component subscribes and re-renders on a 1 Hz tick — not every frame. If we put frame samples into React state, every descendant of `ExchangeProvider` would reconcile every frame and the measurement itself would be the bottleneck. `useSyncExternalStore` gives us the React-native hook shape without the Provider cost.
+2. **Throughput is sampled, not event-stamped.** A rate is a derivative; deriving it from a continuous counter at 1 Hz is less noisy and cheaper than recording per-message timestamps. For the numbers the MetricsPanel shows (book updates/s, trades/s, execs/s), one-second granularity is more than the reader's eye can parse anyway.
+3. **Automatic virtualisation above 100 total levels.** The plain `OrderBookLadder` renders a fixed ±12-row window and is fine up to a few hundred live levels. Past 100, deep scrolls and snapshot-driven replacements start to show up as long tasks. The virtualised ladder uses fixed-height rows, absolute positioning, and an overscan of 8 — simpler than importing `react-window` because we already control the row shape and data source. Users can also force virtualisation via a header toggle; this is useful for testing the code path on typical data without synthesising a deep book.
+
+**Why not Recharts or a virtualisation library.** Recharts' per-tick reconciliation pays off at human-scale update rates (once per second or slower); at 60 Hz it is the wrong abstraction. `react-window` would add a measurement cache we do not need (rows are fixed-height) and key reconciliation logic that our keyed-by-price rendering already handles. The win from owning the virtualisation inline is not brevity — it is that the hot path is visible in one file.
+
+**Consequences.**
+
+- LatencyMonitor's p99 is a window-max, not a true quantile. For a 60-sample window at 60 Hz that is defensible (the histogram is bimodal); over a longer window a real quantile would diverge. Called out in `PERFORMANCE.md §6` so the number is not over-sold.
+- Virtualisation activates only when it is needed. Component tests (OrderBookLadder.test.tsx, TradeTape.test.tsx, OrderEntry.test.tsx, DepthChart.test.tsx) exercise the ordinary-path component, which is what users see in 99 % of sessions. Deep-book behaviour is validated manually via the header toggle plus the metrics panel.
+- `useThroughput`'s ref-updating-during-render is intentional — cumulative counters need to survive across render cycles without triggering a state change on every reducer tick. The 1 Hz interval reads them atomically enough for a dashboard: slices between reads are noise below the panel's displayed precision.

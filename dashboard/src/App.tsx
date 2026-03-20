@@ -1,11 +1,32 @@
+import { useMemo, useState } from "react";
 import { ConnectionStatus } from "./components/ConnectionStatus";
 import { OrderBookLadder } from "./components/OrderBookLadder";
+import { VirtualizedLadder } from "./components/VirtualizedLadder";
 import { DepthChart } from "./components/DepthChart";
 import { TradeTape } from "./components/TradeTape";
 import { PriceChart } from "./components/PriceChart";
 import { OrderEntry } from "./components/OrderEntry";
+import { LatencyMonitor } from "./components/LatencyMonitor";
+import { MetricsPanel } from "./components/MetricsPanel";
+import { useExchange } from "./state/ExchangeContext";
+
+// When the live book exceeds this many levels, switch the ladder to
+// its virtualised variant. The fixed-window ladder stays fast for
+// typical books; virtualisation only pays off once you'd otherwise
+// render hundreds of rows.
+const VIRTUALISATION_THRESHOLD = 100;
 
 export function App() {
+  const { state } = useExchange();
+  const [forceVirtual, setForceVirtual] = useState(false);
+  const deepBook = useMemo(() => {
+    const levels =
+      Object.keys(state.bids.levels).length +
+      Object.keys(state.asks.levels).length;
+    return levels > VIRTUALISATION_THRESHOLD;
+  }, [state.bids, state.asks]);
+  const useVirtual = deepBook || forceVirtual;
+
   return (
     <div className="h-screen flex flex-col">
       <header className="flex items-center justify-between px-4 py-2 border-b border-panel-border">
@@ -15,11 +36,22 @@ export function App() {
             low-latency matching engine · dashboard
           </span>
         </div>
-        <ConnectionStatus />
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-1 text-[11px] text-neutral-fg/70 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={forceVirtual}
+              onChange={(e) => setForceVirtual(e.target.checked)}
+              className="accent-highlight"
+            />
+            virtualise ladder
+          </label>
+          <ConnectionStatus />
+        </div>
       </header>
       <main className="flex-1 min-h-0 grid grid-cols-12 grid-rows-6 gap-2 p-2">
         <section className="col-span-3 row-span-6 min-h-0">
-          <OrderBookLadder />
+          {useVirtual ? <VirtualizedLadder /> : <OrderBookLadder />}
         </section>
         <section className="col-span-6 row-span-3 min-h-0">
           <PriceChart />
@@ -33,31 +65,13 @@ export function App() {
         <section className="col-span-3 row-span-2 min-h-0">
           <TradeTape />
         </section>
-        <Placeholder
-          className="col-span-3 row-span-2"
-          title="Metrics"
-          subtitle="coming in slice 12"
-        />
+        <section className="col-span-3 row-span-1 min-h-0">
+          <LatencyMonitor />
+        </section>
+        <section className="col-span-3 row-span-1 min-h-0">
+          <MetricsPanel />
+        </section>
       </main>
     </div>
-  );
-}
-
-interface PlaceholderProps {
-  className: string;
-  title: string;
-  subtitle: string;
-}
-
-function Placeholder({ className, title, subtitle }: PlaceholderProps) {
-  return (
-    <section className={`${className} min-h-0`}>
-      <div className="h-full flex flex-col items-center justify-center border border-dashed border-panel-border rounded bg-panel-bg/40">
-        <div className="text-sm font-semibold text-neutral-fg/70">{title}</div>
-        <div className="text-[10px] uppercase tracking-wider text-neutral-fg/40">
-          {subtitle}
-        </div>
-      </div>
-    </section>
   );
 }

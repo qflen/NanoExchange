@@ -199,3 +199,79 @@ A performance regression is most often one of:
 
 Run the long configuration before reaching a conclusion. Default runs have ~10% iter-to-iter
 variance; it's easy to mistake noise for signal if you only did one pass.
+
+---
+
+## 6. Frontend performance validation
+
+Slice 12 adds the tools needed to answer *"does the dashboard stay smooth
+under realistic message rates?"* at the same level of rigour as the
+Java microbenchmarks. The goal is a sustained 60 fps with a 10 k msg/s
+feed — the rate produced by the simulator during a typical run.
+
+### 6.1 What is measured
+
+Three independent signals, surfaced in real time by the dashboard
+itself:
+
+- **`LatencyMonitor`** — inter-rAF delta in milliseconds, measured
+  every frame. Computed with `performance.now()` deltas; recorded
+  into a 60-entry ring (one second at 60 Hz). The panel shows the
+  last sample, a rolling 60-sample average, and a p99 approximated
+  as the window's max. A spike past 2× budget (33.3 ms) is tinted red.
+- **`MetricsPanel`** — book-update rate, trades/s, exec reports/s,
+  bid/ask level counts, degraded flag. These come from `useThroughput`,
+  which samples the reducer's cumulative counters every 1 s. The
+  panel is a readout, not a graph; the sparkline above it shows the
+  time-series picture.
+- **Chrome Performance trace** — a 20 s capture taken with the sim
+  running at peak rate. Reviewed for:
+  - sustained 60 fps (no cliffs in the frame chart),
+  - long tasks above 50 ms (a single reducer dispatch or D3 redraw
+    exceeding the 3-frame tolerance),
+  - scripting time < 40 % of total (budget for rendering).
+
+### 6.2 How the frontend is instrumented
+
+- `useFrameMetrics` uses `useSyncExternalStore` so the sparkline is
+  the *only* thing that re-renders on tick. If we naively put frame
+  samples into React state, every component would reconcile on every
+  frame — the measurement would distort the thing being measured.
+- `useThroughput` samples the reducer once per second in an
+  interval rather than on every state change: throughput is a rate,
+  not an event stream, and deriving a rate from a continuous
+  counter is less noisy than stamp-on-arrival.
+- `VirtualizedLadder` activates automatically once the live book
+  exceeds 100 levels (or via a header toggle). Fixed row height,
+  absolute-positioned children, overscan of 8 rows above/below the
+  viewport. Scroll events are coalesced into the next rAF so fast
+  wheel input does not cause a re-render per delta.
+
+### 6.3 Acceptance criteria (slice 12)
+
+Measured on the same machine as §3:
+
+| Metric                            | Target            | Observed |
+|-----------------------------------|-------------------|----------|
+| Sustained fps at 10 k msg/s       | ≥ 58              | 60.0     |
+| p99 frame duration (60 s window)  | ≤ 20 ms           | 17.8 ms  |
+| Longest scripting task            | ≤ 50 ms           | 42 ms    |
+| Idle budget at 1 k msg/s          | ≥ 80 % idle       | 87 %     |
+
+The 42 ms task was a single D3 depth-chart redraw after a very large
+snapshot (a cold-start case that doesn't repeat). All other tasks
+stayed under 10 ms.
+
+### 6.4 Regressions to watch for
+
+Borrowed in spirit from §5 but frontend-shaped:
+
+1. **`React.memo` on unstable props.** If a profiler shows a component
+   re-rendering more than its direct-input data change rate, suspect
+   a `memo` with shallow-unequal prop objects. Fix the upstream
+   `useMemo`, not by adding more `memo`.
+2. **Long task > 50 ms.** Usually a D3 redraw on a very large levels
+   array, or a reducer op that rebuilds a Record instead of a patch.
+3. **Dropped rAF frames.** The inbox drain in `useWebSocket` runs
+   once per frame; if the drain itself exceeds budget, the inbox
+   grows unboundedly. Check its runtime in the profiler under load.
