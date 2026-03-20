@@ -358,3 +358,30 @@ Three downstream consequences:
 - A client with a slow network loses older book updates, not the newest state. For an order-book UI, this is the right trade: the old mid was already overwritten. We do **not** drop trades or exec reports inside the batcher; they are list-appended and flushed in order.
 - The per-client batcher copies the coalesced state on flush, so even if the WS writer is slow, the UDP reader continues to fold updates into the still-owned window. Memory is bounded by (number of live price levels × number of clients), which is small.
 - **macOS loopback multicast requires naming the interface explicitly.** `IP_ADD_MEMBERSHIP` with `INADDR_ANY` works on Linux but silently drops loopback traffic on darwin. The bridge exposes `--multicast-interface` so local development can pass `127.0.0.1`; Linux containers leave it unset. This is an environmental footgun rather than a design choice, but worth writing down so the next person asking "why does my local feed go dark on mac" gets the answer in one grep.
+
+
+---
+
+## ADR-016: Dashboard dispatches WebSocket messages inside a single `requestAnimationFrame`, not on arrival
+
+**Status:** Accepted — slice 10
+
+**Context.** The bridge already coalesces the feed into ≈ 60 Hz batches (ADR-015), but each batch can still contain hundreds of book updates at peak rates. Two naïve consumer patterns both break under load:
+
+1. **Dispatch inside `onmessage`.** React reconciles on every dispatch; at 10_000 msg/s the main thread does nothing but reducer work and diffing. The page drops to single-digit fps.
+2. **Buffer in component state.** `setState` inside `onmessage` has the same problem, plus it forces intermediate renders nobody sees.
+
+**Decision.** `useWebSocket` writes incoming frames into a ref-held inbox array and schedules a single `requestAnimationFrame` per mount. The rAF callback drains the inbox in insertion order and calls `onMessage` once per frame with the accumulated work. Handlers themselves are stored in refs so the hook never reconnects when parent state changes.
+
+**Why this specifically.**
+
+- One drain per frame aligns React's render cycle with the display's refresh. Anything finer is discarded by the browser anyway.
+- A ref-held inbox avoids React state entirely for the arrival path — no re-render is triggered until the drain decides to dispatch.
+- A ref for `onMessage` means the caller can close over reducer state (which changes every batch) without cycling the socket. Reconnect only happens when the URL changes.
+
+**Consequences.**
+
+- Tests mock `requestAnimationFrame` deterministically: enqueue messages via the WS mock, advance the rAF queue manually, assert dispatches. See `useWebSocket.test.ts`.
+- Under StrictMode (dev-only) the effect runs twice. The cleanup closes the first socket and cancels its rAF loop before the second connects — no duplicate dispatches leak.
+- A disconnect triggers a 1 s fixed-delay reconnect. Exponential backoff is overkill here (the bridge is on localhost in dev, same datacenter in prod); a constant retry keeps the "OFFLINE → LIVE" banner reactive.
+- Book-update state uses `Record<number, number>` rather than `Map`. React's referential comparison trips over `Map` mutations; a freshly-constructed record object each reducer step gives memoised selectors clean inputs. The allocation is cheap relative to the render cost a bad equality check would cause.

@@ -27,3 +27,10 @@ venv/
 analytics/outputs/*.html
 analytics/outputs/*.png
 bench/load_results.*
+
+# Dashboard (Node)
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.vite/
+dashboard/coverage/
+dashboard/*.tsbuildinfo
