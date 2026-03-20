@@ -11,7 +11,7 @@ package com.nanoexchange.engine;
  * one or two entries. Linear scan from index 0 is cache-friendly and branch-predictable in a
  * way that pointer chasing through a tree is not. Insertion and removal shift elements, which
  * is O(N) worst case but in practice cheap because N is small and the affected memory is hot.
- * The tradeoff is revisited in slice 7 with benchmarks.
+ * The tradeoff is revisited in stage 7 with benchmarks.
  *
  * <p>Package-private. Callers must be {@link OrderBook}.
  */
@@ -140,7 +140,7 @@ final class BookSide {
         if (level == null) {
             // Pool exhausted — a rare event that signals a deep book or misconfiguration.
             // Allocate rather than reject; a one-off allocation is preferable to rejecting a
-            // new price level. This case is logged by the engine in slice 3.
+            // new price level. This case is logged by the engine in stage 3.
             level = new PriceLevel();
         }
         level.reset(price);

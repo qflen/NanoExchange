@@ -10,7 +10,7 @@ package com.nanoexchange.engine;
  * it with the desired values, process it, and release it back to the pool.
  *
  * <p>The {@code prev} / {@code next} pointers are intrusive linked-list pointers used by the
- * per-price-level FIFO queue in {@code OrderBook} (slice 2). They live on the order itself to
+ * per-price-level FIFO queue in {@code OrderBook} (stage 2). They live on the order itself to
  * avoid allocating a separate wrapper node on every insert.
  */
 public final class Order {

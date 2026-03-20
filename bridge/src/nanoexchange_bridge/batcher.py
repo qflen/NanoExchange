@@ -8,7 +8,7 @@ JSON it's about to throw away. The bridge therefore collects messages
 over a 16 ms window and emits a single JSON batch per client at flush
 time.
 
-**Coalescing rules** (per slice 9 spec):
+**Coalescing rules** (per stage 9 spec):
 
 * Book updates are *keyed* by ``(side, price)`` — only the latest update
   per level is kept. Sequence numbers are preserved so the UI can detect

@@ -1,7 +1,7 @@
 """End-to-end test against a real ExchangeServer subprocess.
 
 Skipped automatically if the Java server binary isn't on disk — run
-``./gradlew :network:installDist`` from the repo root first. On CI this is the slice-13
+``./gradlew :network:installDist`` from the repo root first. On CI this is the stage-13
 regression gate; locally it's a smoke check.
 """
 

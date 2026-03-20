@@ -7,7 +7,7 @@ import type {
   TradeMsg,
 } from "../types";
 
-// Keep the last N trades in-memory. The trade tape (slice 11) reads
+// Keep the last N trades in-memory. The trade tape (stage 11) reads
 // the tail; the price chart reads the whole buffer. 5_000 keeps a few
 // minutes of activity at realistic rates without breaking memo budgets.
 export const TRADE_BUFFER_CAP = 5_000;

@@ -2,7 +2,7 @@
 
 The Java side of this wire is covered by ``WireCodecTest``. These tests make sure the Python
 client agrees with the spec in ``docs/PROTOCOL.md`` on its own, so cross-language drift will
-be caught by slice-13's consistency test rather than sneaking through a one-sided encode.
+be caught by stage-13's consistency test rather than sneaking through a one-sided encode.
 """
 
 from __future__ import annotations

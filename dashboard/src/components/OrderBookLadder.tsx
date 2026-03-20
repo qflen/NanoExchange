@@ -9,7 +9,7 @@ import {
 
 // Render a fixed window of ±N price levels around the BBO so the UI
 // does not reflow on every update. Deep books (thousands of levels)
-// fall to the virtualised ladder in slice 12.
+// fall to the virtualised ladder in stage 12.
 const ROWS_PER_SIDE = 12;
 
 export function OrderBookLadder() {

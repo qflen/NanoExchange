@@ -1,0 +1,73 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel older in-flight runs when a new commit lands on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  java:
+    name: Java (engine + network)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+      - name: Build & test
+        run: ./gradlew --no-daemon check
+
+  python:
+    name: Python (client + bridge + analytics)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e client[dev] -e bridge[dev] -e analytics[dev]
+      - name: Run tests
+        # test_e2e.py auto-skips when the engine binary has not been built
+        # (client/tests/test_e2e.py gates on network/build/install/network/bin/network).
+        # The `java` job above covers the Java side; we don't rebuild it here just to
+        # reach that one E2E test.
+        run: |
+          pytest client/tests bridge/tests analytics/tests
+
+  dashboard:
+    name: Dashboard (vitest + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      # No `cache: npm` — we commit package.json without a lockfile to stay aligned with
+      # the locally-developed Makefile (`make dashboard-install` calls `npm install`, not
+      # `npm ci`). Re-introduce caching the day a lockfile lands.
+      - name: Install
+        run: npm install --no-audit --no-fund
+      - name: Test
+        run: npm test -- --run
+      - name: Build
+        run: npm run build
+
+# JMH benchmarks (./gradlew :bench:jmh) are intentionally not run in CI — shared-hardware
+# numbers are noisy and would turn the PERFORMANCE.md baseline into a moving target. The
+# controlled-machine numbers in docs/PERFORMANCE.md are the source of truth. Nightly
+# benchmark runs against a self-hosted runner are in the backlog.

@@ -204,7 +204,7 @@ variance; it's easy to mistake noise for signal if you only did one pass.
 
 ## 6. Frontend performance validation
 
-Slice 12 adds the tools needed to answer *"does the dashboard stay smooth
+Stage 12 adds the tools needed to answer *"does the dashboard stay smooth
 under realistic message rates?"* at the same level of rigour as the
 Java microbenchmarks. The goal is a sustained 60 fps with a 10 k msg/s
 feed — the rate produced by the simulator during a typical run.
@@ -247,7 +247,7 @@ itself:
   viewport. Scroll events are coalesced into the next rAF so fast
   wheel input does not cause a re-render per delta.
 
-### 6.3 Acceptance criteria (slice 12)
+### 6.3 Acceptance criteria (stage 12)
 
 Measured on the same machine as §3:
 

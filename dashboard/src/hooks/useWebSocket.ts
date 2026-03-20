@@ -41,7 +41,7 @@ export function useWebSocket(options: WebSocketHookOptions): void {
     const drain = () => {
       if (cancelled) return;
       if (inbox.length > 0) {
-        // Drain in insertion order. Slice to avoid re-entrancy issues
+        // Drain in insertion order. Stage to avoid re-entrancy issues
         // if a dispatch synchronously enqueues more messages.
         const batch = inbox.splice(0, inbox.length);
         for (const msg of batch) {

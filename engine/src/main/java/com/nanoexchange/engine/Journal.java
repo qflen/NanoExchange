@@ -127,7 +127,7 @@ public final class Journal implements AutoCloseable {
     /**
      * Replay every valid record from a journal file into {@code visitor}, in order. Stops on
      * first malformed / unterminated record (normal end-of-log). The supplied buffer passed to
-     * the visitor is a read-only slice and is valid only for the duration of the callback.
+     * the visitor is a read-only stage and is valid only for the duration of the callback.
      */
     public static void replay(Path path, RecordVisitor visitor) throws IOException {
         try (FileChannel ch = FileChannel.open(path, StandardOpenOption.READ)) {

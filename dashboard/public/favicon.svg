@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <path d="M6 16a4 4 0 0 1 4-4h14l4 5h26a4 4 0 0 1 4 4v29a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4V16Z" fill="#3a3a3a" stroke="#1a1a1a" stroke-width="1.5"/>
+  <path d="M6 22h52v27a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4V22Z" fill="#2a2a2a"/>
+  <text x="20" y="44" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="700" fill="#e6e6e6">&gt;_</text>
+</svg>

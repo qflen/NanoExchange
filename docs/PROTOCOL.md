@@ -6,7 +6,7 @@ All multi-byte integers are **little-endian**. All fixed-point prices are stored
 
 ---
 
-## 1. Journal record format (slice 3)
+## 1. Journal record format (stage 3)
 
 The journal is an append-only binary log mapped into memory from a single file. Every engine input event (new order, cancel, modify) and every emitted execution report is written here as one record. Replaying the file into a fresh engine reproduces the output stream byte-for-byte, which is what makes the engine testable and auditable.
 
@@ -27,7 +27,7 @@ The journal is an append-only binary log mapped into memory from a single file. 
 
 - **sequence** — a monotonic int64 assigned by the writer. The journal itself does not enforce monotonicity; it is a caller contract. Replay passes each record's sequence to the visitor so downstream code can detect gaps if it cares.
 - **length** — the exact number of payload bytes that follow the header. A length of `0` (or negative) is treated as end-of-log by the reader. The mapped file is pre-allocated and zero-filled at creation, so the natural tail of unused bytes reads as length=0 and terminates replay cleanly without needing a trailer sentinel.
-- **payload** — opaque bytes. The journal does not interpret them; slice 4 will define how order/cancel/modify/report messages serialize into this envelope.
+- **payload** — opaque bytes. The journal does not interpret them; stage 4 will define how order/cancel/modify/report messages serialize into this envelope.
 - **crc32** — standard CRC-32 (polynomial 0xEDB88320, as implemented by `java.util.zip.CRC32`) computed over bytes `[0, 12+N)` of the record — that is, the sequence, length, and payload, but *not* the CRC field itself. Used to detect torn writes and partial flushes at the tail.
 
 ### Example: one record with a 5-byte payload
@@ -72,7 +72,7 @@ Writes are from a single thread (the engine). `replay` opens an independent read
 
 ---
 
-## 2. Order-entry wire protocol (slice 4)
+## 2. Order-entry wire protocol (stage 4)
 
 Clients connect to the order gateway over TCP and exchange length-prefixed binary frames. The transport is TCP with `TCP_NODELAY` enabled on both sides (Nagle's algorithm is disabled because it would coalesce small order frames and add up to 200 ms of latency waiting for ACKs — unacceptable for order entry).
 
@@ -195,7 +195,7 @@ Total on wire: 59 bytes (4 length + 55 body-and-crc). That matches `8 + NEW_ORDE
 
 ---
 
-## 3. Market-data feed (slice 5)
+## 3. Market-data feed (stage 5)
 
 Market data is published to a UDP multicast group. Each datagram is one self-contained message, framed as:
 
@@ -295,8 +295,8 @@ The Python client (`client/src/nanoexchange_client/`) implements the same wire f
 | `put` (1 byte) | `b` / `B` |
 | `ByteOrder.LITTLE_ENDIAN`, packed | `<` prefix (no native alignment) |
 
-Payload layouts in `protocol.py` / `feed.py` mirror the tables above exactly. Slice 13 adds a cross-language consistency test that generates frames from both stacks and asserts byte-for-byte equality; until then this spec is the source of truth and any Java-side change must be mirrored into the Python module in the same commit.
+Payload layouts in `protocol.py` / `feed.py` mirror the tables above exactly. Stage 13 adds a cross-language consistency test that generates frames from both stacks and asserts byte-for-byte equality; until then this spec is the source of truth and any Java-side change must be mirrored into the Python module in the same commit.
 
 ---
 
-*Later slices will extend this document with any additional formats (e.g., cross-instrument admin commands).*
+*Later stages will extend this document with any additional formats (e.g., cross-instrument admin commands).*

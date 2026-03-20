@@ -1,0 +1,47 @@
+# One-command startup for NanoExchange.
+#
+# UDP multicast inside Docker's default bridge network is unreliable; on Linux we run
+# engine + bridge with host networking so the multicast group is visible to both
+# processes and to any native tools (tcpdump, a local analytics run, etc.) without
+# cross-network-namespace gymnastics.
+#
+# On macOS, Docker Desktop's VM does not forward multicast at all — run engine and
+# bridge natively (see README "Quick start") and keep docker compose for the
+# dashboard-only case or for CI reproducibility.
+
+services:
+  engine:
+    build:
+      context: .
+      dockerfile: engine/Dockerfile
+    network_mode: host
+    environment:
+      NX_TCP_PORT: "9000"
+      NX_MCAST_GROUP: "239.200.6.42"
+      NX_MCAST_PORT: "6666"
+    restart: unless-stopped
+
+  bridge:
+    build:
+      context: .
+      dockerfile: bridge/Dockerfile
+    network_mode: host
+    environment:
+      NX_MCAST_GROUP: "239.200.6.42"
+      NX_MCAST_PORT: "6666"
+      NX_GW_HOST: "127.0.0.1"
+      NX_GW_PORT: "9000"
+      NX_WS_PORT: "8765"
+    depends_on:
+      - engine
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    ports:
+      - "5173:80"
+    depends_on:
+      - bridge
+    restart: unless-stopped

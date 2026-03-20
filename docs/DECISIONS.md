@@ -6,25 +6,25 @@ This document captures architectural decisions as they are made, using the light
 
 ## ADR-001: Fixed-point integer prices (price × 10⁸)
 
-**Status:** Accepted — slice 1
+**Status:** Accepted — stage 1
 
 **Context.** Prices must be represented with absolute precision (a price of "100.50" is not "approximately 100.50"). Floating-point types (`double`, `float`) introduce representation error — `0.1 + 0.2 != 0.3` is not a theoretical problem on a matching engine, it is a bug generator. Beyond correctness, `long` comparison is also faster and branch-predictable in a way FP comparison is not, and is trivially deterministic across CPUs and JVMs.
 
 Real exchanges solve this with either (a) fixed-point integers, (b) `BigDecimal`, or (c) a custom decimal type. `BigDecimal` allocates on every arithmetic operation — non-starter for the hot path.
 
-**Decision.** All prices are represented as a `long` holding the price scaled by 10⁸ (eight decimal places). A price of `100.50` is stored as `100_50000000`. The scale is fixed and implicit; it is documented in the wire protocol (slice 4) and in code comments next to the field declaration.
+**Decision.** All prices are represented as a `long` holding the price scaled by 10⁸ (eight decimal places). A price of `100.50` is stored as `100_50000000`. The scale is fixed and implicit; it is documented in the wire protocol (stage 4) and in code comments next to the field declaration.
 
 **Consequences.**
 - Max representable price: ~9.22 × 10¹⁰ (well beyond any realistic instrument price).
 - All arithmetic (compare, add, subtract) is a single machine instruction.
 - Presentation-layer code (Python client, dashboard) must divide by 10⁸ to render. This is a one-liner and documented.
-- Division — if ever needed in the engine — must be done carefully; for slice 1/2 the engine does not divide prices.
+- Division — if ever needed in the engine — must be done carefully; for stage 1/2 the engine does not divide prices.
 
 ---
 
 ## ADR-002: Custom `LongHashMap` over `java.util.HashMap<Long, V>`
 
-**Status:** Accepted — slice 1
+**Status:** Accepted — stage 1
 
 **Context.** The engine uses a map keyed by order ID (`long`) for O(1) cancel/lookup. `java.util.HashMap<Long, V>` boxes the key on every `get`/`put`/`remove`, allocating a `Long` object per call. At even modest order rates this is a steady source of young-gen garbage, which translates directly to tail-latency spikes when GC runs.
 
@@ -50,7 +50,7 @@ Design parameters:
 
 ## ADR-003: Object pooling via Vyukov MPMC ring buffer
 
-**Status:** Accepted — slice 1
+**Status:** Accepted — stage 1
 
 **Context.** The hot path must not allocate. `Order`, `ExecutionReport`, and similar short-lived message types are therefore pooled: pre-allocate N instances at startup, hand them out on acquire, reclaim them on release. This is the textbook technique for trading engines and JVM-based low-latency systems generally.
 
@@ -66,14 +66,14 @@ On empty, `acquire` returns `null` (not throws — exceptions on the hot path ar
 **Consequences.**
 - Pool construction pre-fills to capacity, so a warmed engine never allocates under steady-state traffic.
 - Capacity is rounded up to a power of two — the ring index is a mask instead of a modulo.
-- False sharing between the two position counters and between adjacent slots is not yet addressed. Padding is a known follow-up; deferred to slice 7 benchmarks, where we can measure whether it actually matters in practice before adding code for it.
-- Callers must be disciplined: every acquired instance has a matching release. Leaked instances reduce effective capacity until restart. Unit tests cover round-trip and uniqueness; integration tests in later slices will verify long-running steady-state pool levels.
+- False sharing between the two position counters and between adjacent slots is not yet addressed. Padding is a known follow-up; deferred to stage 7 benchmarks, where we can measure whether it actually matters in practice before adding code for it.
+- Callers must be disciplined: every acquired instance has a matching release. Leaked instances reduce effective capacity until restart. Unit tests cover round-trip and uniqueness; integration tests in later stages will verify long-running steady-state pool levels.
 
 ---
 
 ## ADR-004: Single-threaded matching engine
 
-**Status:** Accepted — slice 2
+**Status:** Accepted — stage 2
 
 **Context.** A matching engine has a global-state problem: every order affects a shared book. Correctness demands a total order over inbound operations — two orders at the same price/time must deterministically produce the same outcome every time. Multiple threads sharing a book need coordination, and every synchronization primitive you add — locks, STM, even lock-free structures — adds latency variance.
 
@@ -87,18 +87,18 @@ The alternatives:
 - **STM / optimistic concurrency**: adds retry overhead and destroys latency predictability.
 - **Partitioned books within one instrument**: impossible — price-time priority is defined across all orders for that instrument.
 
-**Decision.** The matching engine runs on one thread. Inbound messages arrive via a lock-free ring buffer (slice 3), outbound execution reports go to a sink the calling thread owns. Horizontal scale comes from running one engine per instrument, not from parallelizing within one.
+**Decision.** The matching engine runs on one thread. Inbound messages arrive via a lock-free ring buffer (stage 3), outbound execution reports go to a sink the calling thread owns. Horizontal scale comes from running one engine per instrument, not from parallelizing within one.
 
 **Consequences.**
 - Throughput of a single instrument is capped by one core's clock; headroom for ~10M msg/sec of straightforward limit-vs-limit matching on modern hardware is ample for realistic load.
-- The engine must never block — no I/O, no locks, no allocation that might hit a collector pause. The journal (slice 3) is memory-mapped and the producer pattern is fire-and-forget from the engine's perspective.
+- The engine must never block — no I/O, no locks, no allocation that might hit a collector pause. The journal (stage 3) is memory-mapped and the producer pattern is fire-and-forget from the engine's perspective.
 - Cancel and modify API calls must be serialized through the same single thread, which means they flow through the same ring buffer as new orders.
 
 ---
 
 ## ADR-005: Sorted array (not red-black tree) for price levels
 
-**Status:** Accepted — slice 2 (revisit in slice 7 with benchmarks)
+**Status:** Accepted — stage 2 (revisit in stage 7 with benchmarks)
 
 **Context.** Each side of the book has a collection of price levels. The operations are: look up the best (most common — every match begins here), find a specific price (for insert/cancel), iterate from best toward worse (for depth queries and matching). A classical data-structures answer would be a balanced BST — O(log N) everything, tidy asymptotics.
 
@@ -119,7 +119,7 @@ The question is whether the O(N) insert cost of the array ever actually bites. F
 **Decision.** Use a best-first sorted `PriceLevel[]` per side. Binary-search for insert/find, array-shift on mutation, power-of-two resize on growth. The level object itself is pooled (via `ObjectPool<PriceLevel>`) so creating a new level is allocation-free in steady state.
 
 **Consequences.**
-- The assumption "N is small" is load-bearing. Slice 7 benchmarks must validate it — if N grows past ~200 we revisit.
+- The assumption "N is small" is load-bearing. Stage 7 benchmarks must validate it — if N grows past ~200 we revisit.
 - The shift cost scales with N, so a pathological scenario (many fleeting levels at random prices) would punish this choice. Real market data does not look like that, but the test suite should include a worst-case insertion stress.
 - Binary search in a 50-entry array is a pragmatic optimization; a linear scan from index 0 might actually win on branch prediction for very small N, but we keep the binary search for clarity and to handle sudden growth.
 
@@ -127,7 +127,7 @@ The question is whether the O(N) insert cost of the array ever actually bites. F
 
 ## ADR-006: Self-trade prevention policy — reject the incoming order
 
-**Status:** Accepted — slice 2
+**Status:** Accepted — stage 2
 
 **Context.** Trading against yourself is generally prohibited by exchange rules and is flagged by regulators as potential wash-trading. When an incoming order would cross a resting order from the same account, the exchange must prevent the trade. There are three standard policies:
 
@@ -147,7 +147,7 @@ The question is whether the O(N) insert cost of the array ever actually bites. F
 
 ## ADR-007: Iceberg refill moves the order to the tail of the queue
 
-**Status:** Accepted — slice 2
+**Status:** Accepted — stage 2
 
 **Context.** An iceberg order has a visible "tip" quantity (`displayQuantity`) and a hidden reserve (`hiddenQuantity`). When the tip is fully matched, the order "refills" from the reserve. A policy question: does the refilled order retain its original time-priority position (i.e., remain at the head of its price level), or does it go to the tail?
 
@@ -164,7 +164,7 @@ Real exchanges differ in the details but the dominant convention — Nasdaq, Eur
 
 ## ADR-008: Memory-mapped append-only journal
 
-**Status:** Accepted — slice 3
+**Status:** Accepted — stage 3
 
 **Context.** Every engine input and every emitted execution report must persist so the engine can be replayed deterministically — for restart recovery, for regression testing against historical days, and for audit. The options:
 
@@ -179,8 +179,8 @@ Option (3) is what LMAX, Aeron, Chronicle Queue, and most ultra-low-latency logg
 Record format is sequence (int64) + length (int32) + payload (N bytes) + CRC32 (int32), all little-endian. The CRC detects torn writes at the tail; a zero-length field detects untouched file space (the tail of the mapped region is zero-initialized). Replay stops cleanly on either signal, which means no explicit end-of-log marker is needed — the absence of a valid next record *is* the signal.
 
 **Consequences.**
-- Append latency is dominated by a few cache-line stores and one CRC computation; no syscall overhead. Measured in slice 3 as well under a microsecond per record on warm cache.
-- The journal size is fixed at construction. If an engine session writes more than that, `append` throws `IllegalStateException`. Callers must size generously. Rolling segment files are a reasonable follow-up but add complexity that slice 3 doesn't need — one well-sized file per session is enough for benchmarks and test-day replay.
+- Append latency is dominated by a few cache-line stores and one CRC computation; no syscall overhead. Measured in stage 3 as well under a microsecond per record on warm cache.
+- The journal size is fixed at construction. If an engine session writes more than that, `append` throws `IllegalStateException`. Callers must size generously. Rolling segment files are a reasonable follow-up but add complexity that stage 3 doesn't need — one well-sized file per session is enough for benchmarks and test-day replay.
 - `MappedByteBuffer` is not unmapped cleanly on JDK 21 without `sun.misc.Unsafe`-ish gymnastics. We live with this; the mapping is reclaimed when the JVM exits. Tests that open and close journals repeatedly use `@TempDir` so leftover mappings don't pollute the working tree.
 - CRC32 is not cryptographic, which is fine — the goal is torn-write detection, not tamper detection. The implementation uses `java.util.zip.CRC32`, which is hardware-accelerated on x86-64 and ARM64 via intrinsics and costs only a few nanoseconds per small payload.
 
@@ -188,7 +188,7 @@ Record format is sequence (int64) + length (int32) + payload (N bytes) + CRC32 (
 
 ## ADR-009: Manual cache-line padding on ring-buffer sequences
 
-**Status:** Accepted — slice 3
+**Status:** Accepted — stage 3
 
 **Context.** The SPSC ring buffer between the network thread (producer) and the engine thread (consumer) has two hot long fields: `producerSeq` and `consumerSeq`. The producer writes the former on every enqueue and reads the latter on potential wraparound; the consumer writes the latter on every dequeue and reads the former on potential empty. Logically the two sides never touch the same word — but if both fields live in the same 64-byte cache line (which they would, by default, being consecutive `long` fields on the same object), the CPU's coherence protocol treats every write as invalidating the other core's copy of the line. That coherence traffic shows up as MESI invalidations, additional L1 misses, and tens of nanoseconds of extra latency per enqueue and dequeue — exactly the kind of "spooky action at a distance" that gives busy SPSC queues their bad reputation on multi-core.
 
@@ -217,13 +217,13 @@ Additionally, each side caches the opposite side's sequence in a producer-local 
 - The `RingBuffer` class contains several `@SuppressWarnings("unused")` padding longs. These *must not* be removed by well-meaning refactoring; the compiler cannot detect their purpose. A comment next to each island explains why.
 - Memory overhead is a few extra cache lines per ring — trivial compared to the slot array itself.
 - The cached-sequence technique means a freshly-created ring observes the other side's sequence on the very first operation (since the cache is initialized to a "will block" value), which is correct; a steady-state ring only refreshes the cache on catch-up transitions, which is exactly what we want.
-- Verification is structural: the test suite exercises the SPSC invariants (monotonic, no gaps, no duplicates) under load; false-sharing effects are visible in benchmarks (slice 7) rather than unit tests.
+- Verification is structural: the test suite exercises the SPSC invariants (monotonic, no gaps, no duplicates) under load; false-sharing effects are visible in benchmarks (stage 7) rather than unit tests.
 
 ---
 
 ## ADR-010: Length-prefix framing over delimiter framing
 
-**Status:** Accepted — slice 4
+**Status:** Accepted — stage 4
 
 **Context.** The TCP byte stream carries variable-length messages. The two common ways to mark message boundaries are:
 
@@ -243,7 +243,7 @@ Delimiter framing is common in text protocols (HTTP/1 uses CRLF, SMTP uses `.` l
 
 ## ADR-011: NIO Selector on a dedicated thread, zero engine work on the network thread
 
-**Status:** Accepted — slice 4
+**Status:** Accepted — stage 4
 
 **Context.** There are two reasonable Java networking primitives for a server at this scale:
 
@@ -254,7 +254,7 @@ Option (2) is what almost every serious Java server uses — Netty, Vert.x, Unde
 
 A subtler decision: what does the selector thread *do* with decoded events? Two wrong answers are (a) invoke the engine directly on the selector thread (blocks network I/O during engine work), and (b) allocate a queued-event object per message (defeats the zero-allocation discipline).
 
-**Decision.** The order gateway runs the selector on a dedicated thread. That thread's job is narrow: accept connections, read bytes into a pre-allocated per-session buffer, decode frames, and forward the decoded fields into an `InboundHandler` callback. The handler is expected to push the decoded message into a lock-free ring buffer (slice 3) for the engine to consume. The return path uses another ring buffer: the engine publishes execution reports, and the selector thread reads them and writes to the appropriate client socket.
+**Decision.** The order gateway runs the selector on a dedicated thread. That thread's job is narrow: accept connections, read bytes into a pre-allocated per-session buffer, decode frames, and forward the decoded fields into an `InboundHandler` callback. The handler is expected to push the decoded message into a lock-free ring buffer (stage 3) for the engine to consume. The return path uses another ring buffer: the engine publishes execution reports, and the selector thread reads them and writes to the appropriate client socket.
 
 Both read and write buffers are `ByteBuffer.allocateDirect` at connection time and reused for the life of the connection. No allocation happens per frame in the steady state.
 
@@ -268,7 +268,7 @@ Both read and write buffers are `ByteBuffer.allocateDirect` at connection time a
 
 ## ADR-012: UDP multicast with snapshot + incremental for market data
 
-**Status:** Accepted — slice 5
+**Status:** Accepted — stage 5
 
 **Context.** Market data needs to fan out to many subscribers (humans, strategies, feed-replay tools) without the publisher maintaining a per-subscriber connection. Real exchanges solve this with UDP multicast: the publisher sends one datagram, the network replicates it to every subscriber who joined the group. This scales to hundreds of subscribers without affecting publisher CPU or state.
 
@@ -291,7 +291,7 @@ Datagrams are sized to fit within the Ethernet MTU (1472 bytes). When a snapshot
 
 ## ADR-013: Python client mirrors the Java wire protocol via `struct` format strings
 
-**Status:** Accepted — slice 6
+**Status:** Accepted — stage 6
 
 **Context.** The project has two independent encoder/decoder implementations of the same wire protocols: Java (`WireCodec`, `FeedCodec`) on the exchange side, Python (`protocol.py`, `feed.py`) on the client side. A drift between them — a field reordered, a padding byte hallucinated, a length miscounted — would only surface as hard-to-diagnose connectivity failures. The canonical protocol is documented in `docs/PROTOCOL.md` but a prose spec is not machine-checkable.
 
@@ -304,42 +304,42 @@ Two choices offered themselves for the Python side:
 
 Frame-level framing (length prefix for TCP, CRC for both transports) is still done in Python code rather than a format string, because the CRC covers a dynamic-length region.
 
-Cross-language byte equality is **not** enforced per slice (would slow unit tests and confuse local development). Instead, slice 13 adds a dedicated consistency test that generates the same messages from both stacks and asserts the bytes are identical. Until then, the Java + Python unit tests share a spec (`docs/PROTOCOL.md`) as the source of truth.
+Cross-language byte equality is **not** enforced per stage (would slow unit tests and confuse local development). Instead, stage 13 adds a dedicated consistency test that generates the same messages from both stacks and asserts the bytes are identical. Until then, the Java + Python unit tests share a spec (`docs/PROTOCOL.md`) as the source of truth.
 
 **Consequences.**
 - Adding a new wire message requires editing two files (Java + Python) plus `docs/PROTOCOL.md`. That is by design — the spec should be updated first, then the two implementations.
-- A `struct` format string will not catch all drift on its own (e.g. if someone reorders fields consistently in both languages but the spec says otherwise); the slice-13 cross-language test closes that loop.
+- A `struct` format string will not catch all drift on its own (e.g. if someone reorders fields consistently in both languages but the spec says otherwise); the stage-13 cross-language test closes that loop.
 - Python 3.14 is the assumed target; `struct.Struct` has been stable since Python 3, so there is no version risk.
 
 ---
 
 ## ADR-014: Analytics operate on an external journal format; Java-side journaling is opt-in
 
-**Status:** Accepted — slice 8
+**Status:** Accepted — stage 8
 
-**Context.** Slice 3 built a memory-mapped journal (`Journal` in `engine/`) with a well-defined binary format. Slice 8 adds Python analytics whose natural input is that same journal. The shortest path to "we can replay a day of flow and compute VPIN over it" would be to wire `Journal` into `ExchangeServer` unconditionally so every run produces a journal file.
+**Context.** Stage 3 built a memory-mapped journal (`Journal` in `engine/`) with a well-defined binary format. Stage 8 adds Python analytics whose natural input is that same journal. The shortest path to "we can replay a day of flow and compute VPIN over it" would be to wire `Journal` into `ExchangeServer` unconditionally so every run produces a journal file.
 
 Two problems with that.
 
-1. Journaling every record synchronously in the hot path adds `CRC32.update` per record and a memcpy into the mapped region. The benchmarks in §3 of `PERFORMANCE.md` do not currently include journaling overhead; if we enable it by default, the documented numbers become either incorrect or require a second column. That is a larger change than the slice needs.
+1. Journaling every record synchronously in the hot path adds `CRC32.update` per record and a memcpy into the mapped region. The benchmarks in §3 of `PERFORMANCE.md` do not currently include journaling overhead; if we enable it by default, the documented numbers become either incorrect or require a second column. That is a larger change than the stage needs.
 2. The most immediate portfolio artefact (the simulator's PnL + latency chart) does not actually need a journal at all — the simulator has the send/receive timestamps in hand.
 
-**Decision.** Slice 8 ships a journal *reader* (`journal_reader.py`) that parses Java-format journals, plus a *writer* usable by tests and the simulator. The `ExchangeServer` itself is not modified — journaling remains available as a class that a future CLI flag or slice can enable. The analytics CLI (`nx-analytics`) computes its artefacts from the simulator's in-memory run.
+**Decision.** Stage 8 ships a journal *reader* (`journal_reader.py`) that parses Java-format journals, plus a *writer* usable by tests and the simulator. The `ExchangeServer` itself is not modified — journaling remains available as a class that a future CLI flag or stage can enable. The analytics CLI (`nx-analytics`) computes its artefacts from the simulator's in-memory run.
 
 Three downstream consequences:
 
 - **The VPIN test uses synthesised tape**, not a live-engine journal. That is the right level for a unit test anyway — a deterministic known-answer case rather than a live-data regression.
-- **When ExchangeServer opt-in journaling lands** (expected alongside slice 13's ops polish), the existing `journal_reader` is already its intended consumer; no Python-side changes are needed.
+- **When ExchangeServer opt-in journaling lands** (expected alongside stage 13's ops polish), the existing `journal_reader` is already its intended consumer; no Python-side changes are needed.
 - **Simulator latency histograms** come from the simulator's own timestamps, not from a journal. The `latency_analyzer` module accepts any `(send_ts, recv_ts)` stream, so the shape of the histogram is independent of the timestamp source.
 
-**Consequences.** The shortest-path integration is deferred; in exchange, slice 7's benchmark numbers remain valid as documented, and slice 8 stays self-contained and testable without a live engine.
+**Consequences.** The shortest-path integration is deferred; in exchange, stage 7's benchmark numbers remain valid as documented, and stage 8 stays self-contained and testable without a live engine.
 
 
 ---
 
 ## ADR-015: WebSocket bridge batches per-client on a 16 ms window, drops oldest on backpressure
 
-**Status:** Accepted — slice 9
+**Status:** Accepted — stage 9
 
 **Context.** The feed arrives as UDP multicast at whatever rate the engine publishes (tens of thousands of updates/second under load). The browser cannot usefully repaint faster than its refresh rate, and even that is wasted work if most updates hit the same price level. A naïve pipeline — forward every datagram to every connected WebSocket as its own frame — would saturate both the browser event loop and the socket buffer under load. Two independent questions had to be answered:
 
@@ -348,7 +348,7 @@ Three downstream consequences:
 
 **Decisions.**
 
-1. **Per-client, per-window coalescing at ≈ 60 Hz (16 ms).** Each connected session owns its own `Batcher`. The UDP reader fans out every decoded message into every client's batcher; a per-client flush task wakes every 16 ms, snapshots the window, and enqueues one JSON frame to that client's outbox. Book updates are keyed by `(side, price)` — the latest update wins. Trades and exec reports are never coalesced (each is a distinct event). A snapshot supersedes pending book updates in the same window, because the snapshot is authoritative state and any deltas before it are stale. 16 ms is chosen to align roughly with `requestAnimationFrame` on a 60 Hz display; the dashboard (slice 10) applies messages on rAF so anything smaller is discarded anyway.
+1. **Per-client, per-window coalescing at ≈ 60 Hz (16 ms).** Each connected session owns its own `Batcher`. The UDP reader fans out every decoded message into every client's batcher; a per-client flush task wakes every 16 ms, snapshots the window, and enqueues one JSON frame to that client's outbox. Book updates are keyed by `(side, price)` — the latest update wins. Trades and exec reports are never coalesced (each is a distinct event). A snapshot supersedes pending book updates in the same window, because the snapshot is authoritative state and any deltas before it are stale. 16 ms is chosen to align roughly with `requestAnimationFrame` on a 60 Hz display; the dashboard (stage 10) applies messages on rAF so anything smaller is discarded anyway.
 
 2. **Bounded outbox per client, drop-oldest on overflow, surface a `degraded` flag.** Each session has an `asyncio.Queue(maxsize=64)`. When full, the flush task drops the oldest frame, enqueues the latest, and sets a `degraded` bit that is attached to the next successful send. This gives the UI a chance to warn the user ("your connection is lagging") rather than silently drifting from true state. The alternative — letting the queue grow unboundedly, or waiting for `put()` — would couple one slow client to the speed of the rest. A disconnected, wedged TCP socket could then stall the flush loop of every other client sharing the UDP reader.
 
@@ -364,7 +364,7 @@ Three downstream consequences:
 
 ## ADR-016: Dashboard dispatches WebSocket messages inside a single `requestAnimationFrame`, not on arrival
 
-**Status:** Accepted — slice 10
+**Status:** Accepted — stage 10
 
 **Context.** The bridge already coalesces the feed into ≈ 60 Hz batches (ADR-015), but each batch can still contain hundreds of book updates at peak rates. Two naïve consumer patterns both break under load:
 
@@ -391,9 +391,9 @@ Three downstream consequences:
 
 ## ADR-017: Bridge opens one TCP `OrderClient` per browser session; exec reports fold into the same batch stream
 
-**Status:** Accepted — slice 11
+**Status:** Accepted — stage 11
 
-**Context.** Slice 11 lets a browser submit and cancel orders from the dashboard. Two options for how the bridge routes orders to the matching engine:
+**Context.** Stage 11 lets a browser submit and cancel orders from the dashboard. Two options for how the bridge routes orders to the matching engine:
 
 1. **One shared TCP connection, fan-out by `client_id`.** The bridge keeps a single gateway connection, stamps each inbound order with the session's client_id, and when an exec report comes back, finds the right session by looking up client_id in a map. Lightweight but fragile — a dropped gateway socket affects every session; heads-of-line blocking on the send path slows unrelated clients.
 2. **One TCP connection per session.** Each browser gets its own `OrderClient` with its own client_id, its own send path, and its own reports reader. A wedged session affects only itself; the gateway's existing per-client framing assumption stays intact.
@@ -412,17 +412,17 @@ Three downstream consequences:
 **Consequences.**
 
 - One TCP connection per browser is N more sockets on the engine side. In practice this is bounded by concurrent dashboard users (single-digit), not by multicast fanout. If the bound grows, the hard choice (multiplex over one TCP) becomes attractive — but today's users do not justify the engineering cost.
-- Tests stub the gateway by opening a plain asyncio TCP server that decodes NEW_ORDER frames (hand-written format string mirroring the Java side) and replies with a PARTIAL_FILL. The reference wire format lives in `docs/PROTOCOL.md`; both the engine and this test-side parser mirror it independently. The slice-13 cross-language consistency check (ADR-013) will catch drift.
-- A future order-entry slice that supports modify can add a third inbound type without touching the routing layer — all of this hangs off `_handle_inbound` dispatch.
+- Tests stub the gateway by opening a plain asyncio TCP server that decodes NEW_ORDER frames (hand-written format string mirroring the Java side) and replies with a PARTIAL_FILL. The reference wire format lives in `docs/PROTOCOL.md`; both the engine and this test-side parser mirror it independently. The stage-13 cross-language consistency check (ADR-013) will catch drift.
+- A future order-entry stage that supports modify can add a third inbound type without touching the routing layer — all of this hangs off `_handle_inbound` dispatch.
 
 
 ---
 
 ## ADR-018: Frame-rate instrumentation via `useSyncExternalStore`; virtualisation by level count
 
-**Status:** Accepted — slice 12
+**Status:** Accepted — stage 12
 
-**Context.** The dashboard is now read-write (slice 11). "Smooth at 10 k msg/s" is a claim the portfolio makes; slice 12 exists to make it *measurable*. Two specific questions needed answers:
+**Context.** The dashboard is now read-write (stage 11). "Smooth at 10 k msg/s" is a claim the portfolio makes; stage 12 exists to make it *measurable*. Two specific questions needed answers:
 
 1. How do we instrument frame-level performance without distorting it?
 2. At what point does the fixed-window order-book ladder stop being fast enough, and what replaces it?
@@ -439,4 +439,36 @@ Three downstream consequences:
 
 - LatencyMonitor's p99 is a window-max, not a true quantile. For a 60-sample window at 60 Hz that is defensible (the histogram is bimodal); over a longer window a real quantile would diverge. Called out in `PERFORMANCE.md §6` so the number is not over-sold.
 - Virtualisation activates only when it is needed. Component tests (OrderBookLadder.test.tsx, TradeTape.test.tsx, OrderEntry.test.tsx, DepthChart.test.tsx) exercise the ordinary-path component, which is what users see in 99 % of sessions. Deep-book behaviour is validated manually via the header toggle plus the metrics panel.
-- `useThroughput`'s ref-updating-during-render is intentional — cumulative counters need to survive across render cycles without triggering a state change on every reducer tick. The 1 Hz interval reads them atomically enough for a dashboard: slices between reads are noise below the panel's displayed precision.
+- `useThroughput`'s ref-updating-during-render is intentional — cumulative counters need to survive across render cycles without triggering a state change on every reducer tick. The 1 Hz interval reads them atomically enough for a dashboard: stages between reads are noise below the panel's displayed precision.
+
+---
+
+## ADR-019: Docker Compose runs engine + bridge on host network; macOS is a native-only deployment
+
+**Status:** Accepted — stage 13
+
+**Context.** Stage 13's "one-command startup" goal means `docker compose up` needs to produce a working system. The matching engine publishes its feed on UDP multicast, and multicast crosses network-namespace boundaries badly: Docker's default bridge network does not enable multicast between containers, user-defined networks with `com.docker.network.bridge.enable_icc=true` still require per-interface membership gymnastics that are both brittle and opaque to a reviewer skimming the repo. We had three options: (a) replace multicast with unicast for the containerised path only, (b) use `network_mode: host` for the services that touch multicast, (c) ship without Docker.
+
+**Decision.** Compose runs `engine` and `bridge` with `network_mode: host` on Linux; `dashboard` remains on the default bridge network and binds to `:5173`. macOS is documented as "run engine + bridge natively" — Docker Desktop's VM does not forward multicast at all, so no amount of network-mode tweaking recovers functionality there. CI runs Linux, so this is sufficient for automated verification.
+
+**Consequences.**
+- The README's "quick start" is still the native-install path, with Docker as the alternative. A stranger on Linux can run `docker compose up` and get a working system; a stranger on macOS gets a working system via `make` but not via `compose`. This is honest; a silent-fallback to unicast-only would have hidden the protocol divergence.
+- `network_mode: host` bypasses Compose's port mappings for the engine and bridge containers; the engine's TCP port 9000 and the bridge's WebSocket port 8765 live on the host directly. Documented inline in the compose file.
+- The dashboard image is a standard nginx:alpine build, which means the static asset cache-control rules live in `dashboard/nginx.conf`, not in the compose file — future-me should edit that nginx config, not the compose file, when tuning cache behaviour.
+
+---
+
+## ADR-020: CI runs three parallel jobs; JMH benchmarks are not a CI gate
+
+**Status:** Accepted — stage 13
+
+**Context.** GitHub Actions gives us parallel runners at no extra wall-clock cost, and the three test surfaces (Java, Python, dashboard) are independent. The question that took thinking was what to do with JMH: the whole point of `docs/PERFORMANCE.md` is reproducible numbers, and CI is the natural place to re-run them.
+
+But: shared-hardware GitHub runners have variance measured in tens of percent between runs. The numbers in `PERFORMANCE.md` are from a specific Apple M5, and comparing them to a noisy cloud VM would either demand wide per-number tolerances (which defeat the point of a baseline) or produce a constant parade of failures caused by neighbouring VMs, not by code changes.
+
+**Decision.** CI runs three jobs — `java` (`./gradlew check`), `python` (pytest across client/bridge/analytics with pip cache), `dashboard` (vitest + vite build with npm cache) — on every push and pull request. JMH is not wired in. Nightly benchmark runs against a dedicated runner are noted in the backlog; until then, the reviewer compares against the committed PERFORMANCE.md numbers manually if they want a second data point.
+
+**Consequences.**
+- PR feedback under three minutes on a warm cache, under ten on a cold one. Gradle, pip, and npm caches each keyed on their respective lockfiles.
+- The E2E test in `client/tests/test_e2e.py` auto-skips when the engine's `installDist` output is absent, which is the case in the `python` job; the `java` job's `./gradlew check` is what actually exercises the Java side end-to-end. That's documented inline in the workflow so no future maintainer wonders why we're not "running all the tests everywhere."
+- The branch protection rule (if ever enabled) should require all three jobs to be green, not just one; the workflow is structured so each job is individually addressable.

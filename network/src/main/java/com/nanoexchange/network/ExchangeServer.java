@@ -36,7 +36,7 @@ import java.util.concurrent.ConcurrentMap;
  * </ul>
  *
  * <p>Book deltas are computed by comparing a cheap pre-action snapshot of the
- * crossing-relevant price levels to the post-action state. For slice 6 this is a simple
+ * crossing-relevant price levels to the post-action state. For stage 6 this is a simple
  * "emit a BOOK_UPDATE for every currently-visible level touched" policy — an exchange-grade
  * feed would be more selective, but the semantics are correct (consumers rebuild the right
  * aggregate totals from the stream).
@@ -364,7 +364,7 @@ public final class ExchangeServer implements AutoCloseable {
 
     private ClientSession mostRecent() {
         // For cancel/modify we need a routed session; for single-client tests this is enough.
-        // A real gateway carries the session through the decoded callback; slice 6 forgoes that.
+        // A real gateway carries the session through the decoded callback; stage 6 forgoes that.
         return sessionsByClient.values().stream().findFirst().orElse(null);
     }
 

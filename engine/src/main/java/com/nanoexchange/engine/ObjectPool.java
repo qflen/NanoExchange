@@ -34,7 +34,7 @@ import java.util.function.Supplier;
  * to establish the happens-before edge between the slot write and the subsequent read.
  * Positions are kept in {@link AtomicLong} (defaults to {@code compareAndSet} with volatile
  * semantics, which is what we need). Padding to eliminate false sharing between the two
- * positions is a deliberate non-goal for slice 1 and will be revisited if the slice 7
+ * positions is a deliberate non-goal for stage 1 and will be revisited if the stage 7
  * benchmark shows contention in practice.
  *
  * @param <E> element type pooled

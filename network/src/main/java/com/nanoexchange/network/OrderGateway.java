@@ -29,8 +29,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * <h2>Threading</h2>
  * The selector thread is the single reader/writer for every registered socket. Reports that
  * come back from the engine (on a different thread) must be handed off into per-session
- * outbound queues (slice 4 exposes {@link ClientSession#queueOutbound} for this and expects
- * the caller to wake up the selector; future slices will layer a proper ring buffer on top).
+ * outbound queues (stage 4 exposes {@link ClientSession#queueOutbound} for this and expects
+ * the caller to wake up the selector; future stages will layer a proper ring buffer on top).
  */
 public final class OrderGateway implements AutoCloseable {
 
@@ -194,7 +194,7 @@ public final class OrderGateway implements AutoCloseable {
 
     /**
      * Callback the gateway invokes as bytes arrive from clients. Implementations are expected
-     * to hand decoded events off to the engine via a lock-free ring buffer (slice 3) and
+     * to hand decoded events off to the engine via a lock-free ring buffer (stage 3) and
      * return quickly.
      */
     public interface InboundHandler extends WireCodec.DecodedSink {

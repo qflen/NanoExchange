@@ -1,7 +1,7 @@
 """Binary wire protocol, mirrored from the Java ``WireCodec``.
 
 The single source of truth for message layouts is ``docs/PROTOCOL.md``. This file must stay
-byte-compatible with the Java side; a cross-language consistency test (slice 13) generates
+byte-compatible with the Java side; a cross-language consistency test (stage 13) generates
 expected frames from both and compares them.
 
 Frame layout (little-endian everywhere):

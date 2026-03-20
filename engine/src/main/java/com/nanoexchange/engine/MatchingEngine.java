@@ -30,7 +30,7 @@ package com.nanoexchange.engine;
  *
  * <h2>Ownership checks</h2>
  * The engine does not verify that cancels and modifies come from the original client. That
- * responsibility lives in the network layer (slice 4); by the time an instruction reaches the
+ * responsibility lives in the network layer (stage 4); by the time an instruction reaches the
  * engine it has been authorized.
  */
 public final class MatchingEngine {

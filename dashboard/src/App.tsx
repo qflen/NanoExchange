@@ -10,11 +10,9 @@ import { LatencyMonitor } from "./components/LatencyMonitor";
 import { MetricsPanel } from "./components/MetricsPanel";
 import { useExchange } from "./state/ExchangeContext";
 
-// When the live book exceeds this many levels, switch the ladder to
-// its virtualised variant. The fixed-window ladder stays fast for
-// typical books; virtualisation only pays off once you'd otherwise
-// render hundreds of rows.
 const VIRTUALISATION_THRESHOLD = 100;
+
+const PANEL = "min-h-0 min-w-0 resize overflow-auto";
 
 export function App() {
   const { state } = useExchange();
@@ -50,25 +48,25 @@ export function App() {
         </div>
       </header>
       <main className="flex-1 min-h-0 grid grid-cols-12 grid-rows-6 gap-2 p-2">
-        <section className="col-span-3 row-span-6 min-h-0">
+        <section className={`col-span-3 row-span-6 ${PANEL}`}>
           {useVirtual ? <VirtualizedLadder /> : <OrderBookLadder />}
         </section>
-        <section className="col-span-6 row-span-3 min-h-0">
+        <section className={`col-span-6 row-span-3 ${PANEL}`}>
           <PriceChart />
         </section>
-        <section className="col-span-3 row-span-4 min-h-0">
+        <section className={`col-span-3 row-span-4 ${PANEL}`}>
           <OrderEntry />
         </section>
-        <section className="col-span-6 row-span-3 min-h-0">
+        <section className={`col-span-6 row-span-3 ${PANEL}`}>
           <DepthChart />
         </section>
-        <section className="col-span-3 row-span-2 min-h-0">
+        <section className={`col-span-3 row-span-2 ${PANEL}`}>
           <TradeTape />
         </section>
-        <section className="col-span-3 row-span-1 min-h-0">
+        <section className={`col-span-3 row-span-1 ${PANEL}`}>
           <LatencyMonitor />
         </section>
-        <section className="col-span-3 row-span-1 min-h-0">
+        <section className={`col-span-3 row-span-1 ${PANEL}`}>
           <MetricsPanel />
         </section>
       </main>
