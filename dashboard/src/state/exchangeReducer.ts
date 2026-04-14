@@ -12,6 +12,14 @@ import type {
 // minutes of activity at realistic rates without breaking memo budgets.
 export const TRADE_BUFFER_CAP = 5_000;
 
+// Hard cap on the myOrders map. With the simulator pushing 100 k
+// orders and ~80 % resting passively, the map would otherwise grow to
+// tens of thousands of OPEN entries and take the browser with it when
+// the Open Orders list tries to render them as DOM. Once we exceed the
+// cap we evict the oldest-inserted entries (insertion order is
+// preserved in JS object keys for integer-like keys up to 2^31).
+export const MY_ORDERS_CAP = 500;
+
 export interface BookSide {
   // price (float) → quantity. Record wins over Map because React does
   // referential comparison and a new Record is cheap to allocate.
@@ -145,6 +153,16 @@ function applyExecs(
           status: "OPEN",
         };
     }
+  }
+  // Enforce the cap. Object.keys preserves insertion order for
+  // integer keys up to 2^31, so the oldest orders are at the front
+  // and we drop from there. This is an "insurance" path — under
+  // normal trading the cap never trips; it only matters when the
+  // simulator floods the bridge faster than the user reviews orders.
+  const keys = Object.keys(next);
+  if (keys.length > MY_ORDERS_CAP) {
+    const overflow = keys.length - MY_ORDERS_CAP;
+    for (let i = 0; i < overflow; i++) delete next[keys[i] as unknown as number];
   }
   return next;
 }

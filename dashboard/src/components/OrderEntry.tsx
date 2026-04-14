@@ -53,13 +53,24 @@ export function OrderEntry() {
     setPrice((n + delta).toFixed(2));
   };
 
-  const openOrders = useMemo(
-    () =>
-      Object.values(state.myOrders)
-        .filter((o) => o.status === "OPEN" || o.status === "PARTIAL")
-        .sort((a, b) => b.order_id - a.order_id),
-    [state.myOrders],
-  );
+  // Rendering more than a couple hundred rows as DOM nodes is what
+  // actually OOMs the browser under a spam run — not the underlying
+  // state map. Cap the visible list, surface the count, and let the
+  // user see the total without trying to paint it.
+  const OPEN_ORDERS_RENDER_CAP = 200;
+  const { openOrders, openOrdersTotal } = useMemo(() => {
+    const all = Object.values(state.myOrders).filter(
+      (o) => o.status === "OPEN" || o.status === "PARTIAL",
+    );
+    all.sort((a, b) => b.order_id - a.order_id);
+    return {
+      openOrdersTotal: all.length,
+      openOrders:
+        all.length > OPEN_ORDERS_RENDER_CAP
+          ? all.slice(0, OPEN_ORDERS_RENDER_CAP)
+          : all,
+    };
+  }, [state.myOrders]);
 
   const simNum = Number(simCount);
   const simValid = Number.isFinite(simNum) && simNum >= 1 && simNum <= SIM_MAX_ORDERS;
@@ -230,7 +241,12 @@ export function OrderEntry() {
 
       <div className="flex-1 min-h-0 flex flex-col border-t border-panel-border px-3 py-2">
         <div className="text-[11px] text-neutral-fg/60 mb-1 flex-shrink-0">
-          Open orders ({openOrders.length})
+          Open orders ({openOrdersTotal.toLocaleString()})
+          {openOrdersTotal > openOrders.length && (
+            <span className="ml-1 text-neutral-fg/40">
+              — showing newest {openOrders.length.toLocaleString()}
+            </span>
+          )}
         </div>
         <div className="flex-1 min-h-0 overflow-y-auto font-mono text-[11px]">
           {openOrders.length === 0 ? (
