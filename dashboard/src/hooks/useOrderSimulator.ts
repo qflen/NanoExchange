@@ -11,8 +11,18 @@ export const SIM_MAX_ORDERS = 100_000;
 // 100 k orders in under 9 seconds. We back off further if the socket's
 // `bufferedAmount` grows — that signals the network or the bridge is
 // not keeping up and adding more would just bloat memory.
-const PER_FRAME_BUDGET = 200;
+const PER_FRAME_BUDGET_MAX = 200;
+const PER_FRAME_BUDGET_MIN = 16;
 const BACKPRESSURE_BYTES = 1_000_000;
+// Adaptive pacing. If the time between two successive `tick` calls
+// crosses SLOW_FRAME_MS the main thread is already missing its 60 fps
+// budget — halve the per-frame batch so the reducer and render can
+// catch up. A fast frame (<FAST_FRAME_MS) lets the budget grow back
+// toward PER_FRAME_BUDGET_MAX. The 30 ms / 18 ms hysteresis straddles
+// the 60 fps boundary without oscillating on a borderline machine.
+const SLOW_FRAME_MS = 30;
+const FAST_FRAME_MS = 18;
+const RAMP_UP_STEP = 1.15;
 // How long the return traffic must be fully quiet before we consider
 // the simulation truly finished. Activity = bytes still buffered on
 // the WS OR new exec reports / trades hitting the reducer. A 500 ms
@@ -98,6 +108,13 @@ export function useOrderSimulator(): SimulatorAPI {
       setProgress({ running: true, total, sent: 0, phase: "sending" });
       const rng = makeRng((Date.now() ^ total) >>> 0);
       let sent = 0;
+      // Adaptive per-frame budget. Starts optimistic; shrinks on slow
+      // frames, grows back on fast ones. This is the last line of
+      // defence against a user wedging the tab: if the reducer or the
+      // WS send path can't keep up with 200 orders/frame, we don't
+      // keep piling on — we back off until the main thread catches up.
+      let budget = PER_FRAME_BUDGET_MAX;
+      let lastTickT = performance.now();
 
       // Drain watchdog. Polls every animation frame after the last
       // send, watching two signals:
@@ -153,6 +170,19 @@ export function useOrderSimulator(): SimulatorAPI {
       };
 
       const tick = () => {
+        const now = performance.now();
+        const delta = now - lastTickT;
+        lastTickT = now;
+        // Hysteresis around the 60 fps boundary. If the main thread
+        // is already missing frames, halve the budget so the reducer
+        // and render can catch up. A fast frame ramps back toward the
+        // max. Clamped at both ends to keep progress monotonic.
+        if (delta > SLOW_FRAME_MS) {
+          budget = Math.max(PER_FRAME_BUDGET_MIN, Math.floor(budget / 2));
+        } else if (delta < FAST_FRAME_MS) {
+          budget = Math.min(PER_FRAME_BUDGET_MAX, Math.ceil(budget * RAMP_UP_STEP));
+        }
+
         if (cancelRef.current) {
           // Cancel during the send phase: stop sending more orders,
           // but still hand off to the drain watchdog — already-queued
@@ -182,7 +212,7 @@ export function useOrderSimulator(): SimulatorAPI {
             : 0.05;
 
         const remaining = total - sent;
-        const batch = Math.min(PER_FRAME_BUDGET, remaining);
+        const batch = Math.min(budget, remaining);
         for (let i = 0; i < batch; i++) {
           // 80% passive (rest in the book), 20% aggressive (cross the
           // spread to produce trades and exec reports). Aggressive

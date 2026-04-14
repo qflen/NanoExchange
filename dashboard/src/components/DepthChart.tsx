@@ -42,16 +42,7 @@ export function DepthChart() {
   }, [state.bids, state.asks]);
 
   const { bidPath, askPath, x, y, ticks } = useMemo(() => {
-    const allPrices = [
-      ...bidsCum.map((c) => c.price),
-      ...asksCum.map((c) => c.price),
-    ];
-    const allQtys = [
-      ...bidsCum.map((c) => c.cumQty),
-      ...asksCum.map((c) => c.cumQty),
-      0,
-    ];
-    if (allPrices.length === 0 || allQtys.length === 0) {
+    if (bidsCum.length === 0 && asksCum.length === 0) {
       return {
         bidPath: null,
         askPath: null,
@@ -60,14 +51,29 @@ export function DepthChart() {
         ticks: [] as number[],
       };
     }
-    const minP = Math.min(...allPrices);
-    const maxP = Math.max(...allPrices);
+    // Loops, not Math.min/max(...spread): a deep book with tens of
+    // thousands of cumulative levels would otherwise exceed the JS
+    // engine's argument-length limit on spread and silently return the
+    // wrong domain — same crash surface as selectBestBidAsk.
+    let minP = Infinity;
+    let maxP = -Infinity;
+    let maxQ = 0;
+    for (const c of bidsCum) {
+      if (c.price < minP) minP = c.price;
+      if (c.price > maxP) maxP = c.price;
+      if (c.cumQty > maxQ) maxQ = c.cumQty;
+    }
+    for (const c of asksCum) {
+      if (c.price < minP) minP = c.price;
+      if (c.price > maxP) maxP = c.price;
+      if (c.cumQty > maxQ) maxQ = c.cumQty;
+    }
     const padding = (maxP - minP) * 0.05 || 0.5;
     const xScale = scaleLinear()
       .domain([minP - padding, maxP + padding])
       .range([MARGIN.left, WIDTH - MARGIN.right]);
     const yScale = scaleLinear()
-      .domain([0, Math.max(...allQtys) * 1.1 || 1])
+      .domain([0, maxQ * 1.1 || 1])
       .range([HEIGHT - MARGIN.bottom, MARGIN.top]);
 
     const bidArea = area<Cumulative>()
