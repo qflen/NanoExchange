@@ -100,10 +100,25 @@ fi
 # presence of .venv/bin/nx-bridge and dashboard/node_modules is enough.
 # A broken/partial install is caught by the downstream exec failing.
 
+# Platform-appropriate install hint for a missing prereq. Keeps the
+# error message actionable on macOS (brew) and common Linux distros
+# (apt/dnf) without assuming which package manager ships.
+install_hint() {
+  local brew_pkg="$1" linux_pkg="$2"
+  if [[ "$OSTYPE" == darwin* ]]; then
+    printf "  try: brew install %s\n" "$brew_pkg"
+  elif command -v apt >/dev/null 2>&1; then
+    printf "  try: sudo apt install %s\n" "$linux_pkg"
+  elif command -v dnf >/dev/null 2>&1; then
+    printf "  try: sudo dnf install %s\n" "$linux_pkg"
+  fi
+}
+
 if [[ ! -x .venv/bin/nx-bridge ]]; then
   step "first-run: creating Python venv + installing packages"
   if ! command -v python3 >/dev/null 2>&1; then
     err "python3 not found on PATH — install Python ≥ 3.11 and retry"
+    install_hint "python@3.12" "python3 python3-venv"
     exit 1
   fi
   # Recreate from scratch if .venv exists but is broken (missing bin, wrong
@@ -125,6 +140,7 @@ if [[ ! -d dashboard/node_modules ]]; then
   step "first-run: installing dashboard npm packages"
   if ! command -v npm >/dev/null 2>&1; then
     err "npm not found on PATH — install Node ≥ 20 and retry"
+    install_hint "node" "nodejs npm"
     exit 1
   fi
   npm --prefix dashboard install --no-audit --no-fund --silent
