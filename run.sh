@@ -2,6 +2,8 @@
 # NanoExchange one-shot launcher.
 # Starts the Java engine + UDP feed, the Python WebSocket bridge, and the
 # React dashboard. Wires their lifecycles together: Ctrl-C tears them all down.
+# Bootstraps the Python venv and dashboard node_modules on first run so a
+# fresh clone is literally `git clone && ./run.sh`.
 
 set -euo pipefail
 
@@ -13,6 +15,40 @@ MCAST_GROUP=239.200.6.42
 MCAST_PORT=6666
 WS_PORT=8765
 DASH_PORT=5173
+
+# Color helpers. Disabled when stdout is not a TTY or NO_COLOR is set so
+# piped output stays clean. Using 8-color ANSI for portability.
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+  C_RESET=$'\033[0m'
+  C_BOLD=$'\033[1m'
+  C_DIM=$'\033[2m'
+  C_TAG=$'\033[1;36m'     # bold cyan for [run.sh]
+  C_STEP=$'\033[1;35m'    # bold magenta for step headings
+  C_OK=$'\033[1;32m'      # bold green for ✓
+  C_WARN=$'\033[1;33m'    # bold yellow
+  C_ERR=$'\033[1;31m'     # bold red
+  C_INFO=$'\033[0;34m'    # blue for secondary info
+  C_LINK=$'\033[4;36m'    # underlined cyan for URLs
+else
+  C_RESET=""; C_BOLD=""; C_DIM=""; C_TAG=""; C_STEP=""
+  C_OK=""; C_WARN=""; C_ERR=""; C_INFO=""; C_LINK=""
+fi
+
+tag() {
+  printf "%s[run.sh]%s " "${C_TAG}" "${C_RESET}"
+}
+step() {
+  tag; printf "%s%s%s\n" "${C_STEP}" "$*" "${C_RESET}"
+}
+info() {
+  tag; printf "%s%s%s\n" "${C_INFO}" "$*" "${C_RESET}"
+}
+warn() {
+  tag; printf "%s%s%s\n" "${C_WARN}" "$*" "${C_RESET}"
+}
+err() {
+  tag; printf "%s%s%s\n" "${C_ERR}" "$*" "${C_RESET}"
+}
 
 # macOS will not join a multicast group on the loopback adapter unless the
 # interface is named explicitly. Linux picks a default route and is fine.
@@ -41,10 +77,14 @@ Brings up the full dashboard demo in one terminal:
      bridge and renders an order book, depth chart, trade tape, and order
      entry form. Launched via npm --prefix dashboard run dev.
 
-Prereqs (one-time): JDK 21 (auto-provisioned by Gradle), Python ≥ 3.11
-with .venv set up via 'python3 -m venv .venv && .venv/bin/pip install -e
-"client[dev]" -e "bridge[dev]" -e "analytics[dev]"', and Node ≥ 20 with
-'npm --prefix dashboard install'.
+First run auto-bootstraps: the Gradle wrapper pulls JDK 21 via foojay,
+the script creates .venv and pip-installs client/bridge/analytics in
+editable mode, and runs npm install in dashboard/. Subsequent runs
+skip these steps.
+
+Prereqs: Python ≥ 3.11 and Node ≥ 20 on PATH.
+
+Set NO_COLOR=1 to disable ANSI colors.
 
 Ctrl-C tears down all three processes.
 EOF
@@ -54,6 +94,44 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   usage
   exit 0
 fi
+
+# --- First-run bootstrap ----------------------------------------------------
+# Skip silently when already set up. The guards here are minimal — the
+# presence of .venv/bin/nx-bridge and dashboard/node_modules is enough.
+# A broken/partial install is caught by the downstream exec failing.
+
+if [[ ! -x .venv/bin/nx-bridge ]]; then
+  step "first-run: creating Python venv + installing packages"
+  if ! command -v python3 >/dev/null 2>&1; then
+    err "python3 not found on PATH — install Python ≥ 3.11 and retry"
+    exit 1
+  fi
+  # Recreate from scratch if .venv exists but is broken (missing bin, wrong
+  # interpreter path, etc.) — the common failure mode when a Homebrew
+  # Python version rolls.
+  if [[ -d .venv && ! -x .venv/bin/python ]]; then
+    warn "existing .venv looks broken — recreating"
+    rm -rf .venv
+  fi
+  [[ -d .venv ]] || python3 -m venv .venv
+  # Newer pip (26+) requires the path form `./pkg[extras]`; the bare
+  # `pkg[extras]` syntax was deprecated and now errors out.
+  .venv/bin/pip install --disable-pip-version-check --quiet \
+    -e "./client[dev]" -e "./bridge[dev]" -e "./analytics[dev]"
+  info "venv ready"
+fi
+
+if [[ ! -d dashboard/node_modules ]]; then
+  step "first-run: installing dashboard npm packages"
+  if ! command -v npm >/dev/null 2>&1; then
+    err "npm not found on PATH — install Node ≥ 20 and retry"
+    exit 1
+  fi
+  npm --prefix dashboard install --no-audit --no-fund --silent
+  info "dashboard ready"
+fi
+
+# --- Process lifecycle management -------------------------------------------
 
 # Job control puts each '&' child into its own process group so the
 # kill -TERM -- -PID trick below can take down its descendants. Must be
@@ -90,7 +168,7 @@ cleanup() {
   SHUTDOWN_DONE=1
   trap '' INT TERM EXIT HUP
   echo
-  echo "[run.sh] shutting down..."
+  warn "shutting down..."
 
   # Phase 1: gather every pid we know about — tracked children, their
   # whole process groups, every descendant we can find, and anything
@@ -155,7 +233,7 @@ cleanup() {
   pkill -KILL -f 'esbuild' 2>/dev/null || true
   pkill -KILL -f 'vite' 2>/dev/null || true
 
-  echo "[run.sh] done."
+  info "done."
   exit 0
 }
 trap cleanup INT TERM HUP EXIT
@@ -167,21 +245,27 @@ wait_for_port() {
   local start=$SECONDS
   local spin='|/-\'
   local i=0
-  printf "[run.sh] waiting for %s on :%s " "$label" "$port"
+  tag
+  printf "waiting for %s%s%s on :%s%s%s " \
+    "${C_BOLD}" "$label" "${C_RESET}" \
+    "${C_BOLD}" "$port" "${C_RESET}"
   while ! (exec 3<>/dev/tcp/127.0.0.1/"$port") 2>/dev/null; do
     if (( SECONDS - start > timeout )); then
-      printf "\n[run.sh] timeout after %ss waiting for %s\n" "$timeout" "$label"
+      printf "\n"
+      err "timeout after ${timeout}s waiting for ${label}"
       return 1
     fi
-    printf "\b%s" "${spin:i++%${#spin}:1}"
+    printf "\b%s%s%s" "${C_WARN}" "${spin:i++%${#spin}:1}" "${C_RESET}"
     sleep 0.25
   done
   exec 3>&- 3<&- 2>/dev/null || true
-  printf "\b✓ (%ss)\n" "$((SECONDS - start))"
+  printf "\b%s✓%s (%ss)\n" "${C_OK}" "${C_RESET}" "$((SECONDS - start))"
 }
 
-echo "[run.sh] building + starting Java engine on :${ORDER_PORT} (multicast ${MCAST_GROUP}:${MCAST_PORT})"
-echo "[run.sh] first run compiles the engine from scratch — expect ~1-2 min"
+# --- Launch -----------------------------------------------------------------
+
+step "[1/3] Java engine → :${ORDER_PORT} | multicast ${MCAST_GROUP}:${MCAST_PORT}"
+info "first run compiles the engine from scratch — expect ~1-2 min"
 # --no-daemon: keep the JVM in the foreground of the gradle process so
 #   when we kill the gradle wrapper, the engine JVM dies with it. The
 #   default daemon detaches and survives Ctrl-C, leaking ~500 MB each
@@ -193,7 +277,7 @@ PIDS+=($!)
 
 wait_for_port "${ORDER_PORT}" "engine gateway"
 
-echo "[run.sh] starting WebSocket bridge on :${WS_PORT}"
+step "[2/3] WebSocket bridge → :${WS_PORT}"
 .venv/bin/nx-bridge \
   --multicast-group "${MCAST_GROUP}" --multicast-port "${MCAST_PORT}" \
   --order-gw-host 127.0.0.1 --order-gw-port "${ORDER_PORT}" \
@@ -203,11 +287,15 @@ PIDS+=($!)
 
 wait_for_port "${WS_PORT}" "ws bridge" 30
 
-echo "[run.sh] starting dashboard on http://localhost:${DASH_PORT}"
+step "[3/3] Dashboard → http://localhost:${DASH_PORT}"
 npm --prefix dashboard run dev -- --host 127.0.0.1 --port "${DASH_PORT}" &
 PIDS+=($!)
 
 wait_for_port "${DASH_PORT}" "dashboard" 60
 
-echo "[run.sh] all three processes up — open http://localhost:${DASH_PORT}"
+echo
+tag
+printf "%sall three processes up%s — open %s%s%shttp://localhost:%s%s\n" \
+  "${C_OK}" "${C_RESET}" \
+  "${C_LINK}" "${C_BOLD}" "" "${DASH_PORT}" "${C_RESET}"
 wait

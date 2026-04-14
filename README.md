@@ -4,12 +4,14 @@ A zero-allocation matching engine in Java, a UDP multicast market-data feed, a P
 and WebSocket bridge, and a React dashboard that renders a live order book at 60 fps under
 10 k msg/s.
 
-![Dashboard screenshot](docs/screenshots/dashboard.png)
+![Dashboard screenshot](docs/screenshots/dashboard-v2.png)
 
 Live dashboard under the random-order simulator: free-floating Order Book, OHLC Price chart
 with 3s/10s/1m/3m timeframes, Order Entry, Depth heatmap, Trade tape, Metrics, and Latency
-monitor. Architectural depth dive in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), wire
-formats in [`docs/PROTOCOL.md`](docs/PROTOCOL.md), benchmark numbers in
+monitor. Three themes ship in the top-right toggle — **dark**, **light**, and a
+**colorblind-safe** palette (blue/orange in place of green/red). Architectural depth dive in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), wire formats in
+[`docs/PROTOCOL.md`](docs/PROTOCOL.md), benchmark numbers in
 [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md), and every non-obvious call in
 [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
@@ -65,25 +67,24 @@ data). One JSON envelope for the browser. The component-level diagrams live in
 
 ## Quick start
 
-Prerequisites: JDK 21, Python ≥ 3.11, Node ≥ 20.
+Prerequisites: Python ≥ 3.11 and Node ≥ 20. JDK 21 is fetched automatically by the
+Gradle wrapper via the foojay resolver.
 
 ```bash
-# 1. Build the Java side. The wrapper auto-downloads JDK 21 on first run
-#    (via the foojay resolver in settings.gradle.kts) if it isn't installed.
-./gradlew build
-
-# 2. Create a Python venv and install the three sibling packages in editable mode.
-python3 -m venv .venv
-.venv/bin/pip install -e "client[dev]" -e "bridge[dev]" -e "analytics[dev]"
-
-# 3. Install the dashboard's npm deps and run the full test suite.
-make dashboard-install
-make test
-
-# 4. One command brings up the engine, bridge, and dashboard together.
+git clone https://github.com/qflen/NanoExchange.git && cd NanoExchange
 ./run.sh
-#    Open http://localhost:5173. Ctrl-C tears all three processes down.
-#    See ./run.sh --help for what each piece does.
+```
+
+First run auto-bootstraps the Python venv and dashboard npm packages, builds the
+engine, then starts all three processes. Open http://localhost:5173. Ctrl-C tears
+everything down. `./run.sh --help` explains each piece.
+
+To run the full test suite across Java, Python, and the dashboard:
+
+```bash
+./gradlew check
+.venv/bin/pytest client/tests bridge/tests analytics/tests
+npm --prefix dashboard test -- --run
 ```
 
 `docker compose up` is the alternative for CI-style reproducibility — see the
