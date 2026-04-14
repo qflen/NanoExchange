@@ -8,7 +8,7 @@ and WebSocket bridge, and a React dashboard that renders a live order book at 60
 
 Live dashboard under the random-order simulator: free-floating Order Book, OHLC Price chart
 with 3s/10s/1m/3m timeframes, Order Entry, Depth heatmap, Trade tape, Metrics, and Latency
-monitor. Three themes ship in the top-right toggle — **dark**, **light**, and a
+monitor. Three themes in the top-right toggle: **dark**, **light**, and a
 **colorblind-safe** palette (blue/orange in place of green/red). Architectural depth dive in
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), wire formats in
 [`docs/PROTOCOL.md`](docs/PROTOCOL.md), benchmark numbers in
