@@ -56,17 +56,40 @@ export type ExchangeAction =
   | { type: "connection/close" }
   | { type: "batch"; batch: BatchMsg };
 
-function applyBookUpdate(side: BookSide, upd: BookUpdateMsg): BookSide {
-  const levels = { ...side.levels };
-  const orders = { ...side.orders };
-  if (upd.quantity <= 0) {
-    delete levels[upd.price];
-    delete orders[upd.price];
-  } else {
-    levels[upd.price] = upd.quantity;
-    orders[upd.price] = upd.order_count;
+// Apply a whole batch of updates in one pass, cloning each side's
+// records exactly once. The prior per-update spread was O(updates ×
+// levels) and turned a single 200-update batch on a 10 k-level book
+// into ~2 M property copies — the root cause of Firefox stalls when
+// the simulator floods the bridge.
+function applyBookUpdates(
+  bids: BookSide,
+  asks: BookSide,
+  updates: readonly BookUpdateMsg[],
+): { bids: BookSide; asks: BookSide } {
+  let bidsDirty = false;
+  let asksDirty = false;
+  for (const u of updates) {
+    if (u.side === "BUY") bidsDirty = true;
+    else asksDirty = true;
+    if (bidsDirty && asksDirty) break;
   }
-  return { levels, orders };
+  const nextBids = bidsDirty
+    ? { levels: { ...bids.levels }, orders: { ...bids.orders } }
+    : bids;
+  const nextAsks = asksDirty
+    ? { levels: { ...asks.levels }, orders: { ...asks.orders } }
+    : asks;
+  for (const u of updates) {
+    const target = u.side === "BUY" ? nextBids : nextAsks;
+    if (u.quantity <= 0) {
+      delete target.levels[u.price];
+      delete target.orders[u.price];
+    } else {
+      target.levels[u.price] = u.quantity;
+      target.orders[u.price] = u.order_count;
+    }
+  }
+  return { bids: nextBids, asks: nextAsks };
 }
 
 function applySnapshot(
@@ -82,32 +105,48 @@ function applySnapshot(
   return { bids, asks };
 }
 
-function applyExec(
+// Apply a batch of execs in one pass. Terminal states (FILLED,
+// CANCELLED, REJECTED) are dropped from the map immediately — the UI
+// only renders OPEN/PARTIAL, and keeping 100 k filled simulator
+// orders around made every subsequent batch O(n) per exec on the
+// spread. The single clone at the top bounds the per-batch cost to
+// O(myOrders + batch) regardless of batch size.
+function applyExecs(
   my: Record<number, MyOrder>,
-  exec: ExecReportMsg,
+  execs: readonly ExecReportMsg[],
 ): Record<number, MyOrder> {
-  const existing = my[exec.order_id];
-  // A client_id of 0 on the exec means "not mine" — the bridge
-  // stamps client_id = 0 for unknown orders. We track anyway: the UI
-  // decides whether to show "My Orders" vs "All Execs".
-  const next: MyOrder = {
-    order_id: exec.order_id,
-    client_id: exec.client_id,
-    side: exec.side,
-    price: existing?.price ?? exec.price,
-    remaining: exec.remaining_quantity,
-    status:
-      exec.report_type === "FILL"
-        ? "FILLED"
-        : exec.report_type === "PARTIAL_FILL"
-          ? "PARTIAL"
-          : exec.report_type === "CANCELED"
-            ? "CANCELLED"
-            : exec.report_type === "REJECTED"
-              ? "REJECTED"
-              : "OPEN",
-  };
-  return { ...my, [exec.order_id]: next };
+  if (execs.length === 0) return my;
+  const next = { ...my };
+  for (const exec of execs) {
+    const existing = next[exec.order_id];
+    switch (exec.report_type) {
+      case "FILL":
+      case "CANCELED":
+      case "REJECTED":
+        delete next[exec.order_id];
+        continue;
+      case "PARTIAL_FILL":
+        next[exec.order_id] = {
+          order_id: exec.order_id,
+          client_id: exec.client_id,
+          side: exec.side,
+          price: existing?.price ?? exec.price,
+          remaining: exec.remaining_quantity,
+          status: "PARTIAL",
+        };
+        continue;
+      default:
+        next[exec.order_id] = {
+          order_id: exec.order_id,
+          client_id: exec.client_id,
+          side: exec.side,
+          price: existing?.price ?? exec.price,
+          remaining: exec.remaining_quantity,
+          status: "OPEN",
+        };
+    }
+  }
+  return next;
 }
 
 export function exchangeReducer(
@@ -130,10 +169,13 @@ export function exchangeReducer(
         asks = next.asks;
         if (snap.seq > lastSeq) lastSeq = snap.seq;
       }
-      for (const upd of action.batch.book_updates) {
-        if (upd.side === "BUY") bids = applyBookUpdate(bids, upd);
-        else asks = applyBookUpdate(asks, upd);
-        if (upd.seq > lastSeq) lastSeq = upd.seq;
+      if (action.batch.book_updates.length > 0) {
+        const next = applyBookUpdates(bids, asks, action.batch.book_updates);
+        bids = next.bids;
+        asks = next.asks;
+        for (const upd of action.batch.book_updates) {
+          if (upd.seq > lastSeq) lastSeq = upd.seq;
+        }
       }
 
       // Trade buffer: append, drop oldest past cap. Allocate once.
@@ -157,9 +199,7 @@ export function exchangeReducer(
       let myOrders = state.myOrders;
       if (action.batch.execs.length > 0) {
         execs = state.execs.concat(action.batch.execs).slice(-500);
-        for (const e of action.batch.execs) {
-          myOrders = applyExec(myOrders, e);
-        }
+        myOrders = applyExecs(myOrders, action.batch.execs);
       }
 
       return {
@@ -210,10 +250,20 @@ export function selectBestBidAsk(
   bids: BookSide,
   asks: BookSide,
 ): { bestBid: number | null; bestAsk: number | null; mid: number | null } {
-  const bidPrices = Object.keys(bids.levels).map(Number);
-  const askPrices = Object.keys(asks.levels).map(Number);
-  const bestBid = bidPrices.length ? Math.max(...bidPrices) : null;
-  const bestAsk = askPrices.length ? Math.min(...askPrices) : null;
+  // Explicit loops rather than Math.max/min(...arr): a deep book with
+  // tens of thousands of levels can exceed the JS engine's argument
+  // length limit on spread (Firefox is stricter than Chrome here) and
+  // either throw or silently return the wrong answer.
+  let bestBid: number | null = null;
+  for (const k in bids.levels) {
+    const p = +k;
+    if (bestBid === null || p > bestBid) bestBid = p;
+  }
+  let bestAsk: number | null = null;
+  for (const k in asks.levels) {
+    const p = +k;
+    if (bestAsk === null || p < bestAsk) bestAsk = p;
+  }
   const mid =
     bestBid !== null && bestAsk !== null ? (bestBid + bestAsk) / 2 : null;
   return { bestBid, bestAsk, mid };
