@@ -4,7 +4,7 @@ A zero-allocation matching engine in Java, a UDP multicast market-data feed, a P
 and WebSocket bridge, and a React dashboard that renders a live order book at 60 fps under
 10 k msg/s.
 
-![Dashboard screenshot](docs/screenshots/dashboard-v2.png)
+![Dashboard demo](docs/screenshots/nanoexchange_demo.gif)
 
 Live dashboard under the random-order simulator: free-floating Order Book, OHLC Price chart
 with 3s/10s/1m/3m timeframes, Order Entry, Depth heatmap, Trade tape, Metrics, and Latency
