@@ -139,7 +139,7 @@ export function OrderEntry() {
               <button
                 type="button"
                 disabled={orderType === "MARKET"}
-                onClick={() => adjustPrice(-0.01)}
+                onClick={() => adjustPrice(-0.1)}
                 className="px-1.5 rounded-l border border-panel-border text-neutral-fg/70 hover:text-neutral-fg disabled:opacity-30 text-xs"
               >
                 −
@@ -159,7 +159,7 @@ export function OrderEntry() {
               <button
                 type="button"
                 disabled={orderType === "MARKET"}
-                onClick={() => adjustPrice(+0.01)}
+                onClick={() => adjustPrice(+0.1)}
                 className="px-1.5 rounded-r border border-panel-border text-neutral-fg/70 hover:text-neutral-fg disabled:opacity-30 text-xs"
               >
                 +
