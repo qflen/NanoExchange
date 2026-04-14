@@ -191,4 +191,4 @@ machine. Nightly benchmark runs are in the backlog.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT
