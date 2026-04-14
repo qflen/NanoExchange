@@ -21,6 +21,11 @@ export interface TradeMsg {
   price: number;
   quantity: number;
   ts_ns: number;
+  // Client-side arrival timestamp (ms since epoch), stamped in the
+  // reducer when the trade is ingested. The engine's ts_ns is a
+  // monotonic nanos clock that doesn't align with wall time — we rely
+  // on rx_ms for UI bucketing (price candles).
+  rx_ms?: number;
 }
 
 export interface SnapshotLevel {

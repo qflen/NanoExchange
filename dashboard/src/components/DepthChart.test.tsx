@@ -31,8 +31,7 @@ describe("DepthChart", () => {
 
   it("shows an em-dash when the book is empty", () => {
     renderWithState(buildState([]), <DepthChart />);
-    // Heading + placeholder in the top bar.
-    expect(screen.getByText(/Depth/i)).toBeInTheDocument();
+    // Empty book → mid is null and the status bar renders the dash.
     expect(screen.getAllByText(/—/).length).toBeGreaterThan(0);
   });
 });

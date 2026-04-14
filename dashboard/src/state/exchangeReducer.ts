@@ -137,9 +137,16 @@ export function exchangeReducer(
       }
 
       // Trade buffer: append, drop oldest past cap. Allocate once.
+      // Stamp client arrival time — the engine's ts_ns is a monotonic
+      // counter, not wall-clock, so chart bucketing would otherwise
+      // scatter across arbitrary "minutes".
       let trades = state.trades;
       if (action.batch.trades.length > 0) {
-        const combined = state.trades.concat(action.batch.trades);
+        const now = Date.now();
+        const stamped = action.batch.trades.map((t) =>
+          t.rx_ms === undefined ? { ...t, rx_ms: now } : t,
+        );
+        const combined = state.trades.concat(stamped);
         trades =
           combined.length > TRADE_BUFFER_CAP
             ? combined.slice(combined.length - TRADE_BUFFER_CAP)

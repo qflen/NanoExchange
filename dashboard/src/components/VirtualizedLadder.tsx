@@ -41,24 +41,25 @@ export function VirtualizedLadder() {
 
   return (
     <div className="flex flex-col h-full bg-panel-bg border border-panel-border rounded">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-panel-border">
-        <h2 className="text-sm font-bold">Order Book (virtualised)</h2>
-        <div className="text-xs text-neutral-fg/60">
-          {bidRows.length} bid · {askRows.length} ask
-        </div>
+      <div className="flex items-center justify-end px-3 py-1.5 border-b border-panel-border text-xs text-neutral-fg/60">
+        {bidRows.length} bid · {askRows.length} ask
       </div>
-      <div className="flex-1 min-h-0 grid grid-rows-2 gap-0.5">
-        <VirtualList
-          rows={askRows.slice().reverse()}
-          side="SELL"
-          maxQty={maxQty}
-        />
-        <div className="px-3 py-1 text-xs text-center text-highlight border-y border-panel-border">
+      <div className="flex-1 min-h-0 flex flex-col">
+        <div className="flex-1 min-h-0">
+          <VirtualList
+            rows={askRows.slice().reverse()}
+            side="SELL"
+            maxQty={maxQty}
+          />
+        </div>
+        <div className="flex-shrink-0 px-3 py-1 text-xs text-center text-highlight border-y border-panel-border">
           {bestBid !== null && bestAsk !== null
             ? `${bestBid.toFixed(4)}  /  ${bestAsk.toFixed(4)}`
             : "—"}
         </div>
-        <VirtualList rows={bidRows} side="BUY" maxQty={maxQty} />
+        <div className="flex-1 min-h-0">
+          <VirtualList rows={bidRows} side="BUY" maxQty={maxQty} />
+        </div>
       </div>
     </div>
   );
@@ -110,7 +111,7 @@ function VirtualList({ rows, side, maxQty }: VListProps) {
     <div
       ref={containerRef}
       onScroll={onScroll}
-      className="overflow-y-auto font-mono relative"
+      className="h-full overflow-y-auto font-mono relative"
       data-testid={`vlist-${side}`}
     >
       <div style={{ height: `${total * ROW_HEIGHT}px` }}>

@@ -6,8 +6,12 @@ and WebSocket bridge, and a React dashboard that renders a live order book at 60
 
 ![Dashboard screenshot](docs/screenshots/dashboard.png)
 
-> Screenshot placeholder — generate with `make dashboard-dev` against a live engine and save
-> to `docs/screenshots/dashboard.png`.
+Live dashboard under the random-order simulator: free-floating Order Book, OHLC Price chart
+with 3s/10s/1m/3m timeframes, Order Entry, Depth heatmap, Trade tape, Metrics, and Latency
+monitor. Architectural depth dive in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), wire
+formats in [`docs/PROTOCOL.md`](docs/PROTOCOL.md), benchmark numbers in
+[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md), and every non-obvious call in
+[`docs/DECISIONS.md`](docs/DECISIONS.md).
 
 ---
 

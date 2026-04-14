@@ -53,6 +53,9 @@ export function useOrderSubmit() {
         side: draft.side,
         order_type: draft.orderType,
         quantity: draft.quantity,
+        // Stamp wall-clock so trade timestamps (engine copies the
+        // taker's ts) drive the price chart's x-axis instead of 0.
+        timestamp_nanos: Date.now() * 1_000_000,
       };
       if (draft.orderType !== "MARKET") {
         payload.price = draft.price;

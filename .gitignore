@@ -34,3 +34,6 @@ dashboard/dist/
 dashboard/.vite/
 dashboard/coverage/
 dashboard/*.tsbuildinfo
+
+# Local-only planning doc, scrubbed from history
+docs/BUILD_PLAN.md

@@ -17,8 +17,13 @@ import java.nio.channels.SocketChannel;
  */
 public final class ClientSession {
 
-    /** Default per-session buffer size. Tuned so a handful of maximum-size frames fit. */
-    public static final int DEFAULT_BUFFER_SIZE = 64 * 1024;
+    /**
+     * Default per-session buffer size. A 100k-order simulator burst produces ~100k ACKs
+     * plus fills at ~50 bytes each; 1 MiB lets the engine outrun the socket for the
+     * length of a burst without blocking. {@link OrderGateway#send} flushes inline
+     * when this fills, so it caps memory without risking crashes.
+     */
+    public static final int DEFAULT_BUFFER_SIZE = 1 * 1024 * 1024;
 
     private final SocketChannel channel;
     private final ByteBuffer readBuffer;

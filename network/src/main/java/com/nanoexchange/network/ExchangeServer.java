@@ -107,7 +107,11 @@ public final class ExchangeServer implements AutoCloseable {
             NetworkInterface iface,
             int multicastTtl) throws IOException {
         this.book = new OrderBook(64, 4096);
-        this.engine = new MatchingEngine(book, 4096);
+        // STP off: the dashboard drives both sides of the book from one
+        // session (user + simulator), so "self-trades" are exactly what
+        // exercising the matcher requires. Flip back on when the gateway
+        // grows a real per-client auth layer.
+        this.engine = new MatchingEngine(book, 4096, false);
         this.inboundRing = new RingBuffer<>(4096);
         this.outboundRing = new RingBuffer<>(4096);
         this.inboundPool = new InboundEvent[4096];

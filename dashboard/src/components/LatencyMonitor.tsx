@@ -31,15 +31,19 @@ export function LatencyMonitor() {
 
   return (
     <div className="flex flex-col h-full bg-panel-bg border border-panel-border rounded">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-panel-border">
-        <h2 className="text-sm font-bold">Render latency</h2>
-        <div className="text-xs text-neutral-fg/60 tabular-nums">
-          last <span className="text-neutral-fg">{lastFrameMs.toFixed(1)}</span> ms · avg{" "}
-          <span className="text-neutral-fg">{avg60Ms.toFixed(1)}</span> · p99{" "}
+      <div className="flex items-center justify-end gap-3 px-3 py-1.5 border-b border-panel-border text-xs text-neutral-fg/60 tabular-nums whitespace-nowrap overflow-hidden">
+        <span>
+          last <span className="text-neutral-fg">{lastFrameMs.toFixed(1)}</span> ms
+        </span>
+        <span>
+          avg <span className="text-neutral-fg">{avg60Ms.toFixed(1)}</span>
+        </span>
+        <span>
+          p99{" "}
           <span className={p99Ms > TARGET_MS * 2 ? "text-ask-red" : "text-neutral-fg"}>
             {p99Ms.toFixed(1)}
           </span>
-        </div>
+        </span>
       </div>
       <div className="flex-1 min-h-0 p-2">
         <svg

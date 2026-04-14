@@ -1,4 +1,4 @@
-import { useContext, useReducer, useRef } from "react";
+import { useCallback, useContext, useMemo, useReducer, useRef } from "react";
 import type { ReactNode } from "react";
 import {
   exchangeReducer,
@@ -35,14 +35,22 @@ export function ExchangeProvider({ wsUrl, children }: ProviderProps) {
     },
   });
 
-  const send = (payload: unknown) => {
+  const send = useCallback((payload: unknown) => {
     const ws = sockRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(payload));
     }
-  };
+  }, []);
 
-  const value: ExchangeContextValue = { state, send, sockRef };
+  // Memoise the context value so consumers only re-render when `state`
+  // actually changes. Without this, every provider render (including
+  // ones triggered by unrelated parent work) produces a new value
+  // reference and re-renders every consumer — a silent source of
+  // janky input latency under the 60 Hz batch traffic.
+  const value: ExchangeContextValue = useMemo(
+    () => ({ state, send, sockRef }),
+    [state, send],
+  );
   return (
     <ExchangeContext.Provider value={value}>
       {children}

@@ -9,12 +9,32 @@
   --highlight: 255 196 0;
   --panel-bg: 16 18 22;
   --panel-border: 40 44 52;
+  --app-bg: 7 8 11;
+}
+
+/* Colorblind-friendly palette: swap green/red for blue/orange. Works for
+   deuteranopia and protanopia, which together cover the common cases. */
+:root[data-palette="cb"] {
+  --bid-green: 56 146 234;
+  --ask-red: 245 130 49;
+}
+
+:root[data-theme="light"] {
+  --neutral: 32 36 42;
+  --highlight: 176 120 0;
+  --panel-bg: 248 248 250;
+  --panel-border: 210 214 220;
+  --app-bg: 232 234 238;
+}
+:root[data-theme="light"][data-palette="cb"] {
+  --bid-green: 40 108 196;
+  --ask-red: 208 96 20;
 }
 
 html, body, #root {
   height: 100%;
   margin: 0;
-  background: #07080b;
+  background: rgb(var(--app-bg));
   color: rgb(var(--neutral));
   font-family: "JetBrains Mono", Menlo, monospace;
   font-size: 13px;

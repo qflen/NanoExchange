@@ -16,14 +16,18 @@ export function OrderEntry() {
   const [price, setPrice] = useState<string>("");
   const [quantity, setQuantity] = useState<string>("");
   const [lastStatus, setLastStatus] = useState<string | null>(null);
-  const [simCount, setSimCount] = useState<string>("1000");
+  const [simCount, setSimCount] = useState<string>("100");
 
   const { bestBid, bestAsk, mid } = useMemo(
     () => selectBestBidAsk(state.bids, state.asks),
     [state.bids, state.asks],
   );
 
-  const priceNum = price === "" ? NaN : Number(price);
+  // If the user hasn't typed a price, fall back to the live mid (or 100
+  // on a cold book) so a limit order can always submit from the
+  // placeholder alone. Any value typed in the input wins.
+  const placeholderPrice = mid ?? 100;
+  const priceNum = price === "" ? placeholderPrice : Number(price);
   const qtyNum = quantity === "" ? NaN : Number(quantity);
   const priceValid = orderType === "MARKET" || (Number.isFinite(priceNum) && priceNum > 0);
   const qtyValid = Number.isFinite(qtyNum) && qtyNum > 0;
@@ -60,25 +64,22 @@ export function OrderEntry() {
   const simNum = Number(simCount);
   const simValid = Number.isFinite(simNum) && simNum >= 1 && simNum <= SIM_MAX_ORDERS;
   const handleSimulate = () => {
-    if (!state.connected || !simValid) return;
+    if (!simValid) return;
     sim.start(Math.floor(simNum));
   };
 
   return (
     <div className="flex flex-col h-full bg-panel-bg border border-panel-border rounded">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-panel-border">
-        <h2 className="text-sm font-bold">Order Entry</h2>
-        <div className="text-xs text-neutral-fg/60">
-          {bestBid !== null && bestAsk !== null ? (
-            <>
-              <span className="text-bid-green">{bestBid.toFixed(2)}</span>
-              {" / "}
-              <span className="text-ask-red">{bestAsk.toFixed(2)}</span>
-            </>
-          ) : (
-            "—"
-          )}
-        </div>
+      <div className="flex items-center justify-end px-3 py-1.5 border-b border-panel-border text-xs text-neutral-fg/60">
+        {bestBid !== null && bestAsk !== null ? (
+          <>
+            <span className="text-bid-green">{bestBid.toFixed(2)}</span>
+            <span className="px-1">/</span>
+            <span className="text-ask-red">{bestAsk.toFixed(2)}</span>
+          </>
+        ) : (
+          "—"
+        )}
       </div>
 
       <form className="flex flex-col gap-2 p-3" onSubmit={handleSubmit}>
@@ -133,12 +134,16 @@ export function OrderEntry() {
                 −
               </button>
               <input
+                type="text"
                 inputMode="decimal"
+                autoComplete="off"
                 disabled={orderType === "MARKET"}
                 value={price}
                 onChange={(e) => setPrice(e.target.value)}
+                onKeyDown={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
                 placeholder={orderType === "MARKET" ? "market" : mid ? mid.toFixed(2) : "0.00"}
-                className="w-0 flex-1 min-w-0 px-1.5 py-1 bg-black/30 border-y border-panel-border text-right text-sm tabular-nums focus:outline-none focus:border-highlight/60 disabled:opacity-40"
+                className="w-0 flex-1 min-w-0 px-1.5 py-1 bg-neutral-fg/10 border-y border-panel-border text-right text-sm tabular-nums focus:outline-none focus:border-highlight/60 disabled:opacity-40"
               />
               <button
                 type="button"
@@ -154,11 +159,15 @@ export function OrderEntry() {
           <label className="flex flex-col gap-0.5 text-[11px] text-neutral-fg/60 w-[40%]">
             Quantity
             <input
+              type="text"
               inputMode="numeric"
+              autoComplete="off"
               value={quantity}
               onChange={(e) => setQuantity(e.target.value.replace(/[^0-9]/g, ""))}
+              onKeyDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
               placeholder="0"
-              className="px-1.5 py-1 bg-black/30 border border-panel-border rounded text-right text-sm tabular-nums focus:outline-none focus:border-highlight/60 w-full"
+              className="px-1.5 py-1 bg-neutral-fg/10 border border-panel-border rounded text-right text-sm tabular-nums focus:outline-none focus:border-highlight/60 w-full"
             />
           </label>
         </div>
@@ -188,37 +197,42 @@ export function OrderEntry() {
             value={simCount}
             onChange={(e) => setSimCount(e.target.value.replace(/[^0-9]/g, ""))}
             disabled={sim.progress.running}
-            className="w-20 px-1.5 py-1 bg-black/30 border border-panel-border rounded text-right text-sm tabular-nums focus:outline-none focus:border-highlight/60 disabled:opacity-40"
+            className="flex-1 min-w-0 px-1.5 py-1 bg-neutral-fg/10 border border-panel-border rounded text-right text-sm tabular-nums focus:outline-none focus:border-highlight/60 disabled:opacity-40"
           />
           {sim.progress.running ? (
             <button
               type="button"
               onClick={sim.cancel}
-              className="flex-1 py-1.5 rounded border border-ask-red text-ask-red text-xs font-bold"
+              disabled={sim.progress.phase === "draining"}
+              className="w-28 py-2 rounded border border-ask-red text-ask-red text-sm font-bold disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              Cancel ({sim.progress.sent.toLocaleString()} / {sim.progress.total.toLocaleString()})
+              {sim.progress.phase === "draining" ? "Draining…" : "Cancel"}
             </button>
           ) : (
             <button
               type="button"
               onClick={handleSimulate}
-              disabled={!state.connected || !simValid}
-              className="flex-1 py-1.5 rounded bg-highlight/20 border border-highlight text-highlight text-xs font-bold disabled:opacity-40"
+              disabled={!simValid}
+              className="w-28 py-2 rounded bg-highlight/20 border border-highlight text-highlight text-sm font-bold disabled:opacity-40"
             >
-              Simulate {simValid ? simNum.toLocaleString() : "?"}
+              Simulate
             </button>
           )}
         </div>
         <div className="text-[10px] text-neutral-fg/40 mt-1">
-          1 – {SIM_MAX_ORDERS.toLocaleString()}; paced by socket back-pressure
+          {sim.progress.running
+            ? sim.progress.phase === "draining"
+              ? `draining ${sim.progress.total.toLocaleString()} orders…`
+              : `sent ${sim.progress.sent.toLocaleString()} / ${sim.progress.total.toLocaleString()}`
+            : `1 – ${SIM_MAX_ORDERS.toLocaleString()}; paced by socket back-pressure`}
         </div>
       </div>
 
-      <div className="border-t border-panel-border px-3 py-2">
-        <div className="text-[11px] text-neutral-fg/60 mb-1">
+      <div className="flex-1 min-h-0 flex flex-col border-t border-panel-border px-3 py-2">
+        <div className="text-[11px] text-neutral-fg/60 mb-1 flex-shrink-0">
           Open orders ({openOrders.length})
         </div>
-        <div className="max-h-28 overflow-y-auto font-mono text-[11px]">
+        <div className="flex-1 min-h-0 overflow-y-auto font-mono text-[11px]">
           {openOrders.length === 0 ? (
             <div className="text-neutral-fg/40">none</div>
           ) : (

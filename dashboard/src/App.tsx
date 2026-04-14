@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { ConnectionStatus } from "./components/ConnectionStatus";
+import { ThemeToggle } from "./components/ThemeToggle";
 import { OrderBookLadder } from "./components/OrderBookLadder";
 import { VirtualizedLadder } from "./components/VirtualizedLadder";
 import { DepthChart } from "./components/DepthChart";
@@ -38,40 +39,51 @@ function computeInitialLayout(vw: number, vh: number): Record<PanelId, WindowGeo
   const colR = w - colL - colM - 2 * g;
   const rowTop = Math.floor(h * 0.5);
   const rowBot = h - rowTop - g;
-  const orderEntryH = Math.floor(h * 0.66);
-  const tradeTapeH = h - orderEntryH - g;
-  const smallH = Math.floor(tradeTapeH * 0.5);
+  // Right column splits vertically: a short order-entry panel up top,
+  // then a bottom region split horizontally between the trade tape and
+  // a metrics+latency stack. Metrics needs ~240 px to render its ten
+  // rows without scrolling, so latency takes the leftover.
+  const orderEntryH = Math.floor(h * 0.5);
+  const bottomH = h - orderEntryH - g;
+  const colRright = colR - Math.floor(colR / 2) - g;
+  const colRleft = Math.floor(colR / 2);
+  // Metrics just needs enough vertical room for its ten tight rows.
+  // Latency inherits whatever is left of the bottom region.
+  const metricsH = Math.max(170, Math.min(200, bottomH - 160));
+  const latencyH = bottomH - metricsH - g;
   return {
     ladder: { x: 0, y: 0, w: colL, h },
     priceChart: { x: colL + g, y: 0, w: colM, h: rowTop },
     depthChart: { x: colL + g, y: rowTop + g, w: colM, h: rowBot },
     orderEntry: { x: colL + colM + 2 * g, y: 0, w: colR, h: orderEntryH },
-    tradeTape: { x: colL + colM + 2 * g, y: orderEntryH + g, w: Math.floor(colR / 2), h: tradeTapeH },
-    latency: {
-      x: colL + colM + 2 * g + Math.floor(colR / 2) + g,
-      y: orderEntryH + g,
-      w: colR - Math.floor(colR / 2) - g,
-      h: smallH,
-    },
+    tradeTape: { x: colL + colM + 2 * g, y: orderEntryH + g, w: colRleft, h: bottomH },
     metrics: {
-      x: colL + colM + 2 * g + Math.floor(colR / 2) + g,
-      y: orderEntryH + g + smallH + g,
-      w: colR - Math.floor(colR / 2) - g,
-      h: tradeTapeH - smallH - g,
+      x: colL + colM + 2 * g + colRleft + g,
+      y: orderEntryH + g,
+      w: colRright,
+      h: metricsH,
+    },
+    latency: {
+      x: colL + colM + 2 * g + colRleft + g,
+      y: orderEntryH + g + metricsH + g,
+      w: colRright,
+      h: latencyH,
     },
   };
 }
 
 export function App() {
   const { state } = useExchange();
-  const [forceVirtual, setForceVirtual] = useState(false);
-  const deepBook = useMemo(() => {
+  // Auto-switch to the virtualised ladder once the book is too deep to
+  // paint every row each frame. No manual override — when both sides
+  // of the book are shallow, both renderers look identical, so a
+  // user-facing toggle just added a visual no-op.
+  const useVirtual = useMemo(() => {
     const levels =
       Object.keys(state.bids.levels).length +
       Object.keys(state.asks.levels).length;
     return levels > VIRTUALISATION_THRESHOLD;
   }, [state.bids, state.asks]);
-  const useVirtual = deepBook || forceVirtual;
 
   const desktopRef = useRef<HTMLDivElement>(null);
   const initialLayoutRef = useRef<Record<PanelId, WindowGeom> | null>(null);
@@ -97,7 +109,7 @@ export function App() {
   const panels: Array<{ id: PanelId; title: string; node: React.ReactNode }> = [
     {
       id: "ladder",
-      title: "Order Book",
+      title: useVirtual ? "Order Book (virtual)" : "Order Book",
       node: useVirtual ? <VirtualizedLadder /> : <OrderBookLadder />,
     },
     { id: "priceChart", title: "Price", node: <PriceChart /> },
@@ -110,27 +122,28 @@ export function App() {
 
   return (
     <div className="h-screen flex flex-col">
-      <header className="flex items-center justify-between px-4 py-2 border-b border-panel-border" style={{ height: HEADER_PX }}>
-        <div className="flex items-center gap-3">
+      <header className="relative flex items-center px-4 py-2 border-b border-panel-border" style={{ height: HEADER_PX }}>
+        {/* Centred brand: logo + title + subtitle. Absolute-positioned
+            right-side status so the centring is anchored to the header,
+            not pushed by the status width. */}
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-3">
+          <img
+            src="/favicon.svg"
+            alt=""
+            aria-hidden="true"
+            className="w-6 h-6 flex-shrink-0"
+          />
           <h1 className="text-base font-bold tracking-tight">NanoExchange</h1>
           <span className="text-xs text-neutral-fg/60">
             low-latency matching engine · dashboard
           </span>
         </div>
-        <div className="flex items-center gap-3">
-          <label className="flex items-center gap-1 text-[11px] text-neutral-fg/70 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={forceVirtual}
-              onChange={(e) => setForceVirtual(e.target.checked)}
-              className="accent-highlight"
-            />
-            virtualise ladder
-          </label>
+        <div className="ml-auto flex items-center gap-3">
+          <ThemeToggle />
           <ConnectionStatus />
         </div>
       </header>
-      <div ref={desktopRef} className="flex-1 relative overflow-hidden bg-black/30">
+      <div ref={desktopRef} className="flex-1 relative overflow-hidden">
         {panels.map((p) => (
           <Window
             key={p.id}

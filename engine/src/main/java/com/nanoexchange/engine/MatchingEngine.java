@@ -37,10 +37,19 @@ public final class MatchingEngine {
 
     private final OrderBook book;
     private final ObjectPool<ExecutionReport> reportPool;
+    private final boolean stpEnabled;
 
     public MatchingEngine(OrderBook book, int reportPoolCapacity) {
+        this(book, reportPoolCapacity, true);
+    }
+
+    /** STP can be turned off at construction for demo / single-tenant builds where both sides
+     * of the book are driven by one logical client and crossing one's "own" orders is the
+     * whole point. Production builds keep it on. */
+    public MatchingEngine(OrderBook book, int reportPoolCapacity, boolean stpEnabled) {
         this.book = book;
         this.reportPool = new ObjectPool<>(reportPoolCapacity, ExecutionReport::new);
+        this.stpEnabled = stpEnabled;
     }
 
     /** @return the underlying book (for inspection, typically tests and feed publishers). */
@@ -267,6 +276,7 @@ public final class MatchingEngine {
     // =========================================================================================
 
     private boolean hasCrossingSelfResting(Order incoming) {
+        if (!stpEnabled) return false;
         BookSide opposing = incoming.side == Order.SIDE_BUY ? book.asks() : book.bids();
         for (int i = 0; i < opposing.levelCount(); i++) {
             PriceLevel level = opposing.levelAtDepth(i);
@@ -279,13 +289,16 @@ public final class MatchingEngine {
     }
 
     private long availableNonSelfDisplayAtOrBetter(Order incoming) {
+        // Mirrors the STP bypass above: when STP is off, every resting order
+        // (including other "same-client" ones) counts toward FOK viability.
+        boolean ignoreSelf = !stpEnabled;
         BookSide opposing = incoming.side == Order.SIDE_BUY ? book.asks() : book.bids();
         long total = 0L;
         for (int i = 0; i < opposing.levelCount(); i++) {
             PriceLevel level = opposing.levelAtDepth(i);
             if (!crosses(incoming, level.price)) break;
             for (Order r = level.head; r != null; r = r.next) {
-                if (r.clientId != incoming.clientId) {
+                if (ignoreSelf || r.clientId != incoming.clientId) {
                     total += r.displayQuantity;
                     if (total >= incoming.quantity) return total;
                 }

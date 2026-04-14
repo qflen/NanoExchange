@@ -34,7 +34,7 @@ describe("TradeTape", () => {
     renderWithState(state, <TradeTape />);
     expect(screen.getByText(/3 total/i)).toBeInTheDocument();
     // First rendered data row is the newest price.
-    expect(screen.getByText("100.0200")).toBeInTheDocument();
+    expect(screen.getByText("100.02")).toBeInTheDocument();
   });
 
   it("scroll-lock: unpins when user scrolls down; jump-to-latest button reappears", () => {

@@ -96,7 +96,9 @@ export function Window({ title, initial, z, onFocus, children }: WindowProps) {
   );
 
   // Bring-to-front on any pointer-down inside the window body, not just
-  // the header. Matches OS window-manager intuition.
+  // the header. Matches OS window-manager intuition. Capture-phase so
+  // form controls (inputs, buttons) inside the body can still stop
+  // propagation without losing the focus-window behaviour.
   const onBodyPointerDown = useCallback(() => {
     onFocus();
   }, [onFocus]);
@@ -104,7 +106,7 @@ export function Window({ title, initial, z, onFocus, children }: WindowProps) {
   return (
     <div
       ref={rootRef}
-      onPointerDown={onBodyPointerDown}
+      onPointerDownCapture={onBodyPointerDown}
       style={{
         position: "absolute",
         left: pos.x,
@@ -123,7 +125,7 @@ export function Window({ title, initial, z, onFocus, children }: WindowProps) {
         onPointerUp={onHeaderPointerUp}
         onPointerCancel={onHeaderPointerUp}
         style={{ height: HEADER_PX, cursor: "move", touchAction: "none" }}
-        className="flex items-center px-2 text-[11px] font-bold uppercase tracking-wide bg-black/40 border-b border-panel-border select-none flex-shrink-0"
+        className="flex items-center px-2 text-[11px] font-bold uppercase tracking-wide bg-neutral-fg/10 border-b border-panel-border select-none flex-shrink-0"
       >
         {title}
       </div>

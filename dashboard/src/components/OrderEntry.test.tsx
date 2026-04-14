@@ -10,8 +10,11 @@ describe("OrderEntry", () => {
     const submit = screen.getByRole("button", { name: /submit/i });
     expect(submit).toBeDisabled();
 
-    const priceInput = screen.getByPlaceholderText(/0\.00/i);
+    const priceInput = screen.getByPlaceholderText(/0\.00/i) as HTMLInputElement;
     fireEvent.change(priceInput, { target: { value: "100.25" } });
+    // Guard the "I can't edit the price" class of regressions: the
+    // controlled input must accept typed input and reflect it back.
+    expect(priceInput.value).toBe("100.25");
     expect(submit).toBeDisabled();
 
     const qty = screen.getByPlaceholderText(/^0$/);

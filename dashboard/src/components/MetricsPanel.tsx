@@ -15,32 +15,29 @@ export function MetricsPanel() {
 
   return (
     <div className="flex flex-col h-full bg-panel-bg border border-panel-border rounded">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-panel-border">
-        <h2 className="text-sm font-bold">Metrics</h2>
-      </div>
-      <div className="flex-1 min-h-0 p-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs tabular-nums">
-        <Cell label="book updates / s" value={tp.bookUpdatesPerSec.toFixed(0)} />
-        <Cell label="trades / s" value={tp.tradesPerSec.toFixed(1)} />
-        <Cell label="execs / s" value={tp.execsPerSec.toFixed(1)} />
-        <Cell label="levels (bid/ask)" value={`${bidLevels}/${askLevels}`} />
-        <Cell label="last seq" value={tp.totalBookUpdates.toString()} />
-        <Cell label="trades total" value={tp.totalTrades.toString()} />
-        <Cell
+      <div className="min-h-0 overflow-y-auto px-3 py-2 flex flex-col gap-0.5 text-xs tabular-nums">
+        <Row label="book updates / s" value={tp.bookUpdatesPerSec.toFixed(0)} />
+        <Row label="trades / s" value={tp.tradesPerSec.toFixed(1)} />
+        <Row label="execs / s" value={tp.execsPerSec.toFixed(1)} />
+        <Row label="levels (bid/ask)" value={`${bidLevels}/${askLevels}`} />
+        <Row label="last seq" value={tp.totalBookUpdates.toString()} />
+        <Row label="trades total" value={tp.totalTrades.toString()} />
+        <Row
           label="best bid"
           value={bestBid !== null ? bestBid.toFixed(4) : "—"}
           valueClass="text-bid-green"
         />
-        <Cell
+        <Row
           label="best ask"
           value={bestAsk !== null ? bestAsk.toFixed(4) : "—"}
           valueClass="text-ask-red"
         />
-        <Cell
+        <Row
           label="mid"
           value={mid !== null ? mid.toFixed(4) : "—"}
           valueClass="text-highlight"
         />
-        <Cell
+        <Row
           label="degraded"
           value={state.degraded ? "YES" : "no"}
           valueClass={state.degraded ? "text-ask-red" : "text-neutral-fg/60"}
@@ -50,7 +47,7 @@ export function MetricsPanel() {
   );
 }
 
-function Cell({
+function Row({
   label,
   value,
   valueClass,
@@ -60,9 +57,9 @@ function Cell({
   valueClass?: string;
 }) {
   return (
-    <>
-      <div className="text-neutral-fg/50">{label}</div>
-      <div className={`text-right ${valueClass ?? ""}`}>{value}</div>
-    </>
+    <div className="flex items-center justify-between gap-2 whitespace-nowrap">
+      <span className="text-neutral-fg/50 truncate">{label}</span>
+      <span className={`text-right ${valueClass ?? ""}`}>{value}</span>
+    </div>
   );
 }

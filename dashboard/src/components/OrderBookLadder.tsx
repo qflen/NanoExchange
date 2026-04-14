@@ -38,23 +38,20 @@ export function OrderBookLadder() {
 
   return (
     <div className="flex flex-col h-full bg-panel-bg border border-panel-border rounded">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-panel-border">
-        <h2 className="text-sm font-bold">Order Book</h2>
-        <div className="text-xs text-neutral-fg/70">
-          {mid !== null ? (
-            <>
-              mid <span className="text-neutral-fg">{mid.toFixed(4)}</span>
-              {spread !== null && (
-                <>
-                  {" "}· spread{" "}
-                  <span className="text-neutral-fg">{spread.toFixed(4)}</span>
-                </>
-              )}
-            </>
-          ) : (
-            <>waiting for data…</>
-          )}
-        </div>
+      <div className="flex items-center justify-end px-3 py-1.5 border-b border-panel-border text-xs text-neutral-fg/70">
+        {mid !== null ? (
+          <>
+            mid <span className="text-neutral-fg ml-1">{mid.toFixed(4)}</span>
+            {spread !== null && (
+              <>
+                <span className="px-1">·</span>spread{" "}
+                <span className="text-neutral-fg ml-1">{spread.toFixed(4)}</span>
+              </>
+            )}
+          </>
+        ) : (
+          <>waiting for data…</>
+        )}
       </div>
       <div className="grid grid-cols-3 gap-1 px-3 py-1 text-[11px] text-neutral-fg/50 border-b border-panel-border">
         <div className="text-right">Qty</div>

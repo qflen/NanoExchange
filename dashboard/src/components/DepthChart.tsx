@@ -101,11 +101,8 @@ export function DepthChart() {
 
   return (
     <div className="flex flex-col h-full bg-panel-bg border border-panel-border rounded">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-panel-border">
-        <h2 className="text-sm font-bold">Depth</h2>
-        <div className="text-xs text-neutral-fg/60">
-          {mid !== null ? <>mid {mid.toFixed(4)}</> : "—"}
-        </div>
+      <div className="flex items-center justify-end px-3 py-1.5 border-b border-panel-border text-xs text-neutral-fg/60">
+        {mid !== null ? <>mid {mid.toFixed(4)}</> : "—"}
       </div>
       <div className="flex-1 min-h-0 p-2">
         <svg

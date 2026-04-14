@@ -178,6 +178,25 @@ public final class OrderGateway implements AutoCloseable {
      * thread. From another thread, stage the frame and call {@link #wakeup()}.
      */
     public void send(ClientSession session, ByteBuffer frame) throws IOException {
+        // When the engine emits reports faster than the socket can drain
+        // (100k-order simulator bursts), the per-session 1 MiB buffer
+        // can fill. Flush inline and retry rather than throwing: the
+        // engine loop owns this thread, so there is nothing else to do
+        // while we wait. We give up and drop after a bounded spin so a
+        // wedged client can't halt the engine forever.
+        int attempts = 0;
+        while (frame.remaining() > session.writeBuffer().remaining()) {
+            boolean drained = session.flushWrite();
+            if (drained) break;
+            if (++attempts >= 1024) {
+                SelectionKey key = session.channel().keyFor(selector);
+                if (key != null && key.isValid()) {
+                    key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
+                }
+                return;
+            }
+            Thread.onSpinWait();
+        }
         session.queueOutbound(frame);
         boolean drained = session.flushWrite();
         if (!drained) {
