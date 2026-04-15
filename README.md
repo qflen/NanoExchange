@@ -1,19 +1,20 @@
 # NanoExchange
 
-A zero-allocation matching engine in Java, a UDP multicast market-data feed, a Python client
-and WebSocket bridge, and a React dashboard that renders a live order book at 60 fps under
-10 k msg/s.
+A zero-allocation matching engine and full-stack exchange simulator, from
+byte-level wire protocols to a 60 fps React dashboard.
+
+**Java 21 · Python · React 18 · TypeScript · Tailwind · UDP multicast · JMH**
 
 ![Dashboard demo](docs/screenshots/nanoexchange_demo.gif)
 
 Live dashboard under the random-order simulator: free-floating Order Book, OHLC Price chart
 with 3s/10s/1m/3m timeframes, Order Entry, Depth heatmap, Trade tape, Metrics, and Latency
-monitor. Three themes in the top-right toggle: **dark**, **light**, and a
-**colorblind-safe** palette (blue/orange in place of green/red). Architectural depth dive in
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), wire formats in
-[`docs/PROTOCOL.md`](docs/PROTOCOL.md), benchmark numbers in
-[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md), and every non-obvious call in
-[`docs/DECISIONS.md`](docs/DECISIONS.md).
+monitor. Three themes in the top-right toggle: dark, light, and a
+colorblind-safe palette (blue/orange in place of green/red). Deep dives in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (processes, threads, memory model),
+[`docs/PROTOCOL.md`](docs/PROTOCOL.md) (byte-level wire formats),
+[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) (benchmark methodology and results), and
+[`docs/DECISIONS.md`](docs/DECISIONS.md) (20 ADRs).
 
 ---
 
@@ -25,11 +26,11 @@ feed with snapshot + incremental recovery, a deterministic memory-mapped journal
 client library, a WebSocket bridge, a real-time React UI, and JMH benchmarks that quantify
 every layer.
 
-It is explicitly **not** a toy. The matching engine holds zero allocations on its hot path
-after warmup, across all supported order types (LIMIT, MARKET, IOC, FOK, ICEBERG), verified
-with JMH `-prof gc`. The ring buffer outperforms `ArrayBlockingQueue` by ~1.3×. The dashboard
-stays at 60 fps while processing 10 k market-data messages per second because every incoming
-WebSocket message is drained inside a single `requestAnimationFrame`, not on arrival.
+The matching engine holds zero allocations on its hot path after warmup, across all supported
+order types (LIMIT, MARKET, IOC, FOK, ICEBERG), verified with JMH `-prof gc`. The ring buffer
+outperforms `ArrayBlockingQueue` by ~1.3×. The dashboard stays at 60 fps while processing
+10 k market-data messages per second because every incoming WebSocket message is drained
+inside a single `requestAnimationFrame`, not on arrival.
 
 ## Architecture
 
@@ -65,32 +66,10 @@ data). One JSON envelope for the browser. The component-level diagrams live in
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); the byte-level layouts live in
 [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 
-## Quick start
-
-Prerequisites: Python ≥ 3.11 and Node ≥ 20. JDK 21 is fetched automatically by the
-Gradle wrapper via the foojay resolver.
-
-```bash
-git clone https://github.com/qflen/NanoExchange.git && cd NanoExchange
-./run.sh
-```
-
-First run auto-bootstraps the Python venv and dashboard npm packages, builds the
-engine, then starts all three processes. Open http://localhost:5173. Ctrl-C tears
-everything down. `./run.sh --help` explains each piece.
-
-To run the full test suite across Java, Python, and the dashboard:
-
-```bash
-./gradlew check
-.venv/bin/pytest client/tests bridge/tests analytics/tests
-npm --prefix dashboard test -- --run
-```
-
-`docker compose up` is the alternative for CI-style reproducibility — see the
-[Docker notes](#docker-notes) for multicast caveats.
-
 ## Measured performance
+
+Numbers are per-component, not end-to-end. The 10 k figure is the dashboard/bridge
+ceiling; the engine is three orders of magnitude higher.
 
 | Component                              | Metric                      | Result                |
 |----------------------------------------|-----------------------------|-----------------------|
@@ -136,20 +115,45 @@ pointers, and interpretation notes in [`docs/PERFORMANCE.md`](docs/PERFORMANCE.m
   includes a market-making simulator that drives the live engine via the TCP gateway. See
   `make analytics`.
 
+## Quick start
+
+Prerequisites: Python ≥ 3.11 and Node ≥ 20. JDK 21 is fetched automatically by the
+Gradle wrapper via the foojay resolver.
+
+```bash
+git clone https://github.com/qflen/NanoExchange.git && cd NanoExchange
+./run.sh
+```
+
+First run auto-bootstraps the Python venv and dashboard npm packages, builds the
+engine, then starts all three processes. Open http://localhost:5173. Ctrl-C tears
+everything down. `./run.sh --help` explains each piece.
+
+To run the full test suite across Java, Python, and the dashboard:
+
+```bash
+./gradlew check
+.venv/bin/pytest client/tests bridge/tests analytics/tests
+npm --prefix dashboard test -- --run
+```
+
+`docker compose up` is the alternative for CI-style reproducibility: see the
+[Docker notes](#docker-notes) for multicast caveats.
+
 ## Layout
 
 ```
-engine/                 Java — pooled order book, matching engine, ring buffer, journal
-network/                Java — TCP order gateway + UDP multicast publisher + binary codecs
-bench/                  Java — JMH benchmarks (headline numbers live here)
-client/                 Python — TCP order client + UDP feed handler + book builder
-analytics/              Python — VPIN, latency histograms, market-maker simulator
-bridge/                 Python — UDP/TCP ↔ WebSocket with per-client rAF-window batching
-dashboard/              React 18 + TypeScript + Tailwind — the live UI
+engine/                 Java: pooled order book, matching engine, ring buffer, journal
+network/                Java: TCP order gateway + UDP multicast publisher + binary codecs
+bench/                  Java: JMH benchmarks (headline numbers live here)
+client/                 Python: TCP order client + UDP feed handler + book builder
+analytics/              Python: VPIN, latency histograms, market-maker simulator
+bridge/                 Python: UDP/TCP ↔ WebSocket with per-client rAF-window batching
+dashboard/              React 18 + TypeScript + Tailwind: the live UI
 docs/
 ├── ARCHITECTURE.md     process + thread + memory model
 ├── BUILD_PLAN.md       execution plan and order-of-construction
-├── DECISIONS.md        20 ADRs — every non-obvious call made in this repo
+├── DECISIONS.md        20 ADRs: every non-obvious call made in this repo
 ├── PERFORMANCE.md      benchmark methodology, results, flamegraph pointers
 ├── PROTOCOL.md         wire + journal + feed formats, byte-level
 └── screenshots/
@@ -158,7 +162,7 @@ docs/
 ## Docker notes
 
 `docker compose up` builds and starts three containers: `engine`, `bridge`, and `dashboard`
-(nginx-served static build). The engine and bridge run with `network_mode: host` on Linux —
+(nginx-served static build). The engine and bridge run with `network_mode: host` on Linux because
 UDP multicast inside a user-defined bridge network is flaky and the loopback-interface dance
 that macOS needs does not translate cleanly to Docker. On macOS, Docker Desktop's VM does
 not forward multicast at all; run the engine and bridge natively (or in a Linux VM) and keep
@@ -172,11 +176,11 @@ GitHub Actions runs on every push and PR:
 - `python`: `pytest` across `client/`, `bridge/`, and `analytics/` with a cached `pip` dir
 - `dashboard`: `vitest run` and `vite build` with a cached `node_modules`
 
-Benchmarks (`./gradlew :bench:jmh`) are not run in CI — they are noisy on shared hardware
+Benchmarks (`./gradlew :bench:jmh`) are not run in CI: they are noisy on shared hardware
 and the numbers in [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) come from a controlled
 machine. Nightly benchmark runs are in the backlog.
 
-## Reflection — what I would do differently
+## Tradeoffs & future work
 
 - **The price-level container is still a sorted array.** ADR-005 pins this as a deliberate
   tradeoff for shallow books; the JMH numbers agreed when I measured it. The first time I
