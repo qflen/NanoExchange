@@ -3,7 +3,13 @@
 A zero-allocation matching engine and full-stack exchange simulator, from
 byte-level wire protocols to a 60 fps React dashboard.
 
-**Java 21 · Python · React 18 · TypeScript · Tailwind · UDP multicast · JMH**
+![Java 21](https://img.shields.io/badge/Java%2021-ED8B00?style=for-the-badge&logo=openjdk&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![React 18](https://img.shields.io/badge/React%2018-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)
+![Tailwind](https://img.shields.io/badge/Tailwind-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white)
+![UDP Multicast](https://img.shields.io/badge/UDP%20Multicast-0052CC?style=for-the-badge&logo=wireshark&logoColor=white)
+![JMH](https://img.shields.io/badge/JMH-FF6B35?style=for-the-badge&logo=openjdk&logoColor=white)
 
 ![Dashboard demo](docs/screenshots/nanoexchange_demo.gif)
 
