@@ -28,11 +28,13 @@ import java.util.concurrent.ConcurrentMap;
  * <h2>Thread topology</h2>
  * <ul>
  *   <li>Gateway thread — NIO selector; reads TCP frames, pushes decoded events into
- *       {@code inboundRing}; drains {@code outboundRing} to emit execution reports.</li>
+ *       {@code inboundRing}, and (when the per-session socket buffer back-pressures) drains
+ *       outbound writes that the engine thread queued via {@link OrderGateway#send}.</li>
  *   <li>Engine thread — reads {@code inboundRing}, invokes {@link MatchingEngine}, captures
  *       execution reports and the resulting book deltas, publishes incrementals and trades on
- *       the multicast feed, and pushes each report into {@code outboundRing} for the gateway
- *       thread to fan out to the originating TCP client.</li>
+ *       the multicast feed, encodes each report with {@link WireCodec}, and calls
+ *       {@link OrderGateway#send} to deliver the encoded buffer to the originating TCP
+ *       client.</li>
  * </ul>
  *
  * <p>Book deltas are computed by comparing a cheap pre-action snapshot of the
@@ -86,7 +88,6 @@ public final class ExchangeServer implements AutoCloseable {
     private final OrderGateway gateway;
     private final MarketDataPublisher publisher;
     private final RingBuffer<InboundEvent> inboundRing;
-    private final RingBuffer<OutboundFrame> outboundRing;
     private final InboundEvent[] inboundPool;
     private final OutboundFrame[] outboundPool;
     private final Order[] orderPool;
@@ -113,7 +114,6 @@ public final class ExchangeServer implements AutoCloseable {
         // grows a real per-client auth layer.
         this.engine = new MatchingEngine(book, 4096, false);
         this.inboundRing = new RingBuffer<>(4096);
-        this.outboundRing = new RingBuffer<>(4096);
         this.inboundPool = new InboundEvent[4096];
         for (int i = 0; i < inboundPool.length; i++) inboundPool[i] = new InboundEvent();
         this.outboundPool = new OutboundFrame[4096];

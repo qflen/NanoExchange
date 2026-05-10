@@ -1,0 +1,64 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+  }
+}
+
+direction: down
+
+engine: Java engine JVM {
+  label.near: top-right
+  style: {
+    fill: "#f7fafc"
+    stroke: "#2d3748"
+    font-color: "#2d3748"
+    font-size: 14
+    italic: true
+  }
+
+  gateway: "Gateway thread\n(NIO selector)" {
+    style.fill: "#ffffff"
+  }
+  ring: "inbound ring (SPSC)" {
+    shape: queue
+    style.fill: "#fef5e7"
+  }
+  matching: "Engine thread\n(MatchingEngine)" {
+    style.fill: "#ffffff"
+  }
+  multicast: "Multicast\npublisher" {
+    style.fill: "#ffffff"
+  }
+  journal: "memory-mapped\njournal" {
+    shape: cylinder
+    style.fill: "#fef5e7"
+  }
+
+  gateway -> ring: decode TCP frames
+  ring -> matching
+  matching -> gateway: encoded reports
+  matching -> multicast
+  matching -> journal
+}
+
+cli: "Python client\nnanoexchange_client" {
+  style.fill: "#ffffff"
+}
+br: "Python WebSocket bridge\nnanoexchange_bridge" {
+  style.fill: "#ffffff"
+}
+dash: "React dashboard\ndashboard/" {
+  style.fill: "#ffffff"
+}
+anl: "Python analytics\nVPIN, simulator, load test" {
+  style.fill: "#ffffff"
+}
+
+cli <-> engine.gateway: binary TCP :9000
+br <-> engine.gateway: binary TCP :9000
+engine.multicast -> cli: "UDP multicast\n239.200.6.42"
+engine.multicast -> br: "UDP multicast\n239.200.6.42"
+br <-> dash: JSON WebSocket :8765
+engine.journal -> anl: offline replay {
+  style.stroke-dash: 4
+}

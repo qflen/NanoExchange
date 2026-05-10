@@ -37,12 +37,13 @@ The Java engine JVM runs on exactly **two business threads** plus JVM infrastruc
 |   (NIO selector, TCP I/O)   |            |   (matching + feed publish) |
 |                             |            |                             |
 |  - accept TCP connections   |            |  - spin-read inboundRing    |
-|  - read frames, decode      |   ring     |  - MatchingEngine.process   |
+|  - read frames, decode      |   SPSC     |  - MatchingEngine.process   |
 |  - push InboundEvent into   +---------->+|  - publish feed messages    |
-|    inboundRing              |  SPSC      |  - push OutboundFrame into  |
-|  - drain outboundRing,      |            |    outboundRing             |
-|    write to client sockets  +<----------+|  - append to journal        |
-|                             |   ring     |                             |
+|    inboundRing              |   ring     |  - encode ExecutionReport   |
+|                             |            |    into a pooled            |
+|  - selector OP_WRITE drains |  direct    |    OutboundFrame and call   |
+|    a session's outbound     +<----------+|    gateway.send(session, .) |
+|    buffer when it backs up  |   call     |  - append to journal        |
 +-----------------------------+            +-----------------------------+
          ^                                              |
          | TCP (binary, length-prefix, CRC)             | UDP multicast (binary)
@@ -52,19 +53,22 @@ The Java engine JVM runs on exactly **two business threads** plus JVM infrastruc
    +------------+                                +----------------+
 ```
 
-Two rings, both SPSC (one producer, one consumer):
+One SPSC ring (Gateway → Engine) and one cross-thread method call (Engine → Gateway):
 
 - **`inboundRing`** — Gateway → Engine. Elements are pooled `InboundEvent` structs
   (`ExchangeServer.InboundEvent`) carrying one of `EV_NEW_ORDER`, `EV_CANCEL`, or
-  `EV_MODIFY` plus all fields decoded from the wire.
-- **`outboundRing`** — Engine → Gateway. Elements are pooled `OutboundFrame` structs
-  containing a pre-encoded `ByteBuffer` and the target `ClientSession`. The gateway thread
-  writes each frame to the owning socket in its next selector iteration.
-
-Neither ring is `java.util.concurrent`; both are
-[`RingBuffer`](../engine/src/main/java/com/nanoexchange/engine/RingBuffer.java) with
-cache-line-padded sequence cursors ([ADR-009](DECISIONS.md#adr-009-manual-cache-line-padding-on-ring-buffer-sequences)).
-The producer CAS-claims a slot; the consumer spin-waits with `Thread.onSpinWait()`.
+  `EV_MODIFY` plus all fields decoded from the wire. The ring is a
+  [`RingBuffer`](../engine/src/main/java/com/nanoexchange/engine/RingBuffer.java) with
+  cache-line-padded sequence cursors
+  ([ADR-009](DECISIONS.md#adr-009-manual-cache-line-padding-on-ring-buffer-sequences)).
+  The gateway CAS-claims a slot; the engine spin-waits with `Thread.onSpinWait()`.
+- **Engine → Gateway** is a direct method call. The engine thread acquires a pooled
+  `OutboundFrame` (a 256-byte little-endian `ByteBuffer` plus a `ClientSession`
+  reference), encodes the `ExecutionReport` with `WireCodec`, and calls
+  `gateway.send(session, buffer)`. `OrderGateway.send` copies the bytes into the
+  session's outbound buffer and tries to flush synchronously; if the socket
+  back-pressures, it sets `OP_WRITE` on the selector key and the gateway thread
+  completes the write on its next iteration.
 
 ### Why two threads and not more?
 
@@ -180,11 +184,11 @@ Following a single LIMIT BUY order from the browser through the system and back:
         → publishFeedUpdate(level): build BOOK_UPDATE, send on multicast
           with feedSequence++ on the engine thread's publisher
         → journal.append(seq, payload) for both the NEW_ORDER and the ACK
-        → outboundRing.claim().writeReport(ack).commit()
-
- t≈3µs  Gateway thread          drains outboundRing
-        → encodes ACK with WireCodec into the session's write buffer
-        → selector next tick: writes buffer to client socket
+        → encode the ACK with WireCodec into a pooled OutboundFrame buffer
+        → gateway.send(session, buffer) copies the frame into the session's
+          outbound buffer and flushes synchronously; on socket back-pressure
+          it registers OP_WRITE so the gateway selector finishes the write
+          on its next tick
 
  t≈1ms  Bridge                  OrderClient.reports() yields the decoded ACK
         → translator → batcher.add(exec_report_json)
